@@ -1,19 +1,26 @@
 #!/bin/bash
-echo "[Instalando dependencias base...]"
+echo "[🔧 Instalando dependencias base para virtualización...]"
 sudo apt update
 sudo apt install -y \
   qemu-kvm \
   libvirt-daemon-system \
+  libvirt-daemon \
+  libvirt-daemon-driver-qemu \
   libvirt-clients \
   bridge-utils \
   virtinst \
-  wget curl git \
-  mini-dlna
+  wget curl git mini-dlna
+
+echo "[🧩 Activando libvirt...]"
 sudo systemctl enable --now libvirtd
+
+# Verificar que el socket de libvirt está disponible
 if [ ! -S /var/run/libvirt/libvirt-sock ]; then
-  echo "❌ libvirt no está activo. Aborta."
+  echo "❌ Error: libvirt no está activo o el socket no existe. Abortando..."
   exit 1
 fi
+
+echo "[✅ Entorno de virtualización preparado]"
 set -e
 LOG_DIR="/var/log/fitandsetup"
 mkdir -p "$LOG_DIR"
