@@ -144,32 +144,80 @@ fi
 log "Time Machine compartido como 'andrei-ubuntu.local' y activo."
 
 # BLOQUE 5: Snapshots automáticos y limpieza inteligente
-log "Configurando Snapper para snapshots automáticos del sistema..."
+# BLOQUE 5: Snapshots automáticos y limpieza inteligente (con rsnapshot)
+log "Configurando rsnapshot para backups del sistema..."
 
 if ! $is_simulation; then
-  apt install -y snapper
-  snapper -c root create-config /
-  sed -i 's/^ALLOW_USERS=.*/ALLOW_USERS="root"/' /etc/snapper/configs/root
+  echo "[📦 Instalando rsnapshot para backups en ext4...]"
+  sudo apt install -y rsnapshot
 
-  cron_job="/etc/cron.d/snapshots_auto"
-  echo "0 */6 * * * root snapper create -c root -d 'Snapshot cada 6h'" > "$cron_job"
-  echo "30 */12 * * * root snapper create -c root -d 'Snapshot cada 12h'" >> "$cron_job"
-  echo "15 3 * * * root snapper create -c root -d 'Snapshot diario'" >> "$cron_job"
-  echo "45 4 */3 * * root snapper create -c root -d 'Snapshot cada 72h'" >> "$cron_job"
+  echo "[🛠️ Configurando rsnapshot...]"
 
-  # Limpieza si espacio crítico
-  cat <<CLEAN > /usr/local/bin/snapper_cleanup_if_low_space.sh
+  SNAPSHOT_ROOT="/mnt/storage/rsnapshot"
+  SOURCE="/"
+
+  # Copia archivo base
+  sudo cp /etc/rsnapshot.conf /etc/rsnapshot.conf.bak
+
+  # Modifica configuración principal
+  sudo sed -i "s|^snapshot_root.*|snapshot_root   $SNAPSHOT_ROOT/|" /etc/rsnapshot.conf
+  sudo sed -i 's/^#cmd_cp/cmd_cp/' /etc/rsnapshot.conf
+  sudo sed -i 's/^#cmd_rm/cmd_rm/' /etc/rsnapshot.conf
+  sudo sed -i 's/^#cmd_rsync/cmd_rsync/' /etc/rsnapshot.conf
+
+  # Define intervalos personalizados
+  sudo sed -i '/^interval /d' /etc/rsnapshot.conf
+  echo -e "interval\t6h\t7" | sudo tee -a /etc/rsnapshot.conf
+  echo -e "interval\t12h\t7" | sudo tee -a /etc/rsnapshot.conf
+  echo -e "interval\tdaily\t7" | sudo tee -a /etc/rsnapshot.conf
+  echo -e "interval\t72h\t4" | sudo tee -a /etc/rsnapshot.conf
+
+  # Añade fuente a respaldar
+  if ! grep -q -E "backup\s+/\s+" /etc/rsnapshot.conf; then
+    echo -e "backup\t$SOURCE\tlocalhost/" | sudo tee -a /etc/rsnapshot.conf
+  fi
+
+  sudo mkdir -p "$SNAPSHOT_ROOT"
+
+  # Verifica configuración
+  rsnapshot configtest || {
+    echo "❌ Error en configuración de rsnapshot"
+    exit 1
+  }
+
+  echo "[⏱️ Añadiendo tareas programadas...]"
+  (
+    sudo crontab -l 2>/dev/null
+    echo "0 */6 * * * /usr/bin/rsnapshot 6h"
+    echo "0 */12 * * * /usr/bin/rsnapshot 12h"
+    echo "0 3 * * * /usr/bin/rsnapshot daily"
+    echo "0 */72 * * * /usr/bin/rsnapshot 72h"
+  ) | sudo crontab -
+
+  # Limpieza automática si se llena
+  echo "[🧹 Configurando limpieza automática de snapshots si hay poco espacio...]"
+
+  cat <<'CLEAN' | sudo tee /usr/local/bin/rsnapshot_cleanup_if_low_space.sh > /dev/null
 #!/bin/bash
-usage=\$(df / | awk 'NR==2 {print \$5}' | sed 's/%//')
-if (( usage > 70 )); then
-  echo "[\$(date)] Espacio bajo en /. Limpiando snapshots antiguos." >> /var/log/fitandsetup/snapper_cleanup.log
-  snapper -c root cleanup number
-  touch /mnt/storage/snapshot_cleanup_alert.txt
+LOG="/var/log/fitandsetup/rsnapshot_cleanup.log"
+SNAPSHOT_ROOT="/mnt/storage/rsnapshot"
+usage=$(df "$SNAPSHOT_ROOT" | awk 'NR==2 {print $5}' | sed 's/%//')
+
+if (( usage > 80 )); then
+    echo "[$(date)] Espacio en $SNAPSHOT_ROOT es $usage%. Limpiando snapshots antiguos..." >> "$LOG"
+    for interval in 6h 12h daily 72h; do
+        oldest=$(ls -1dt "$SNAPSHOT_ROOT"/$interval.* 2>/dev/null | tail -n 1)
+        if [ -d "$oldest" ]; then
+            rm -rf "$oldest"
+            echo "[$(date)] Eliminado: $oldest" >> "$LOG"
+        fi
+    done
+    touch "$SNAPSHOT_ROOT/rsnapshot_cleanup_alert.txt"
 fi
 CLEAN
 
-  chmod +x /usr/local/bin/snapper_cleanup_if_low_space.sh
-  echo "0 */4 * * * root /usr/local/bin/snapper_cleanup_if_low_space.sh" >> "$cron_job"
+  sudo chmod +x /usr/local/bin/rsnapshot_cleanup_if_low_space.sh
+  echo "0 */4 * * * root /usr/local/bin/rsnapshot_cleanup_if_low_space.sh" | sudo tee /etc/cron.d/rsnapshot_cleanup > /dev/null
 fi
 
-log "Snapper configurado con snapshots automáticos y limpieza inteligente."
+log "rsnapshot configurado con backups automáticos y limpieza inteligente."
