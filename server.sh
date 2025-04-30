@@ -1,5 +1,14 @@
 #!/bin/bash
-
+echo "[Instalando dependencias base...]"
+sudo apt update
+sudo apt install -y \
+  qemu-kvm \
+  libvirt-daemon-system \
+  libvirt-clients \
+  bridge-utils \
+  virtinst \
+  wget curl git \
+  mini-dlna
 set -e
 LOG_DIR="/var/log/fitandsetup"
 mkdir -p "$LOG_DIR"
