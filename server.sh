@@ -9,6 +9,11 @@ sudo apt install -y \
   virtinst \
   wget curl git \
   mini-dlna
+sudo systemctl enable --now libvirtd
+if [ ! -S /var/run/libvirt/libvirt-sock ]; then
+  echo "❌ libvirt no está activo. Aborta."
+  exit 1
+fi
 set -e
 LOG_DIR="/var/log/fitandsetup"
 mkdir -p "$LOG_DIR"
