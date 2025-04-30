@@ -1,5 +1,5 @@
 #!/bin/bash
-echo "[🔧 Instalando dependencias base para virtualización...]"
+echo "[🔧 Instalando dependencias base para virtualización y servicios...]"
 sudo apt update
 sudo apt install -y \
   qemu-kvm \
@@ -9,7 +9,8 @@ sudo apt install -y \
   libvirt-clients \
   bridge-utils \
   virtinst \
-  wget curl git mini-dlna
+  wget curl git \
+  minidlna
 
 echo "[🧩 Activando libvirt...]"
 sudo systemctl enable --now libvirtd
@@ -20,7 +21,7 @@ if [ ! -S /var/run/libvirt/libvirt-sock ]; then
   exit 1
 fi
 
-echo "[✅ Entorno de virtualización preparado]"
+echo "[✅ Entorno de virtualización y DLNA preparados]"
 set -e
 LOG_DIR="/var/log/fitandsetup"
 mkdir -p "$LOG_DIR"
