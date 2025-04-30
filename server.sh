@@ -56,10 +56,15 @@ log "Asignando /dev/$dev_storage a /mnt/storage"
 log "Asignando /dev/$dev_backup a /mnt/backup"
 
 if ! $is_simulation; then
-  mount "/dev/$dev_storage" "$mnt_storage"
-  mount "/dev/$dev_backup" "$mnt_backup"
-  echo "/dev/$dev_storage $mnt_storage ext4 defaults 0 2" >> /etc/fstab
-  echo "/dev/$dev_backup $mnt_backup ext4 defaults 0 2" >> /etc/fstab
+  # Detectar particiones en los discos
+  part_storage=$(lsblk -ln /dev/$dev_storage | awk 'NR==2 {print $1}')
+  part_backup=$(lsblk -ln /dev/$dev_backup | awk 'NR==2 {print $1}')
+
+  mount "/dev/$part_storage" "$mnt_storage"
+  mount "/dev/$part_backup" "$mnt_backup"
+
+  echo "/dev/$part_storage $mnt_storage ext4 defaults 0 2" >> /etc/fstab
+  echo "/dev/$part_backup $mnt_backup ext4 defaults 0 2" >> /etc/fstab
 fi
 
 log "Montaje de discos completado."
