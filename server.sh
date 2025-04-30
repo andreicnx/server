@@ -52,6 +52,7 @@ else
   dev_backup="${ssds[0]}"
 fi
 
+
 log "Asignando /dev/$dev_storage a /mnt/storage"
 log "Asignando /dev/$dev_backup a /mnt/backup"
 
@@ -117,7 +118,7 @@ fi
 
 log "Descargando imagen de Home Assistant OS (KVM)..."
 
-haos_img_url="https://github.com/home-assistant/operating-system/releases/latest/download/haos_ova-10.5.qcow2.xz"
+haos_img_url="https://github.com/home-assistant/operating-system/releases/download/10.5/haos_ova-10.5.qcow2.xz"
 haos_img_local="/tmp/haos.qcow2.xz"
 
 if ! $is_simulation; then
