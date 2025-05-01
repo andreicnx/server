@@ -279,21 +279,31 @@ log "[🔁 Reinstalando la máquina virtual de Home Assistant...]"
 HA_LOG="/var/log/fitandsetup/ha_vm.log"
 HA_DISK="/mnt/storage/haos_vm/haos.qcow2"
 HA_VM="home-assistant"
+HA_URL="https://github.com/home-assistant/operating-system/releases/latest/download/haos_ova-11.1.qcow2.xz"
+HA_DISK_XZ="${HA_DISK}.xz"
 
 if virsh list --all | grep -q "$HA_VM"; then
   log "[🧨 Eliminando VM existente y su disco...]"
-
   virsh destroy "$HA_VM" &>/dev/null || true
   virsh undefine "$HA_VM" --nvram &>/dev/null || true
   rm -f "$HA_DISK"
+  rm -f "$HA_DISK_XZ"
 fi
 
 mkdir -p "$(dirname "$HA_DISK")"
 log "[⬇️ Descargando imagen de HAOS...]"
-curl -s -L -o "$HA_DISK" "https://github.com/home-assistant/operating-system/releases/latest/download/haos_ova-11.1.qcow2.xz"
-
-log "[📦 Descomprimiendo imagen...]"
-xz -d "$HA_DISK.xz"
+if curl -sSL -o "$HA_DISK_XZ" "$HA_URL"; then
+  log "[📦 Descomprimiendo imagen...]"
+  if xz -d "$HA_DISK_XZ"; then
+    log "[✅ Imagen descargada y descomprimida correctamente.]"
+  else
+    log "[❌ Fallo al descomprimir $HA_DISK_XZ]"
+    exit 1
+  fi
+else
+  log "[❌ Error al descargar $HA_URL]"
+  exit 1
+fi
 
 log "[⚙️ Creando VM con libvirt...]"
 virt-install \
