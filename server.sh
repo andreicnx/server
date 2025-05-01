@@ -31,88 +31,6 @@ else
   apt update && apt install -y "${missing[@]}"
 fi
 
-log "[🧩 Activando libvirt...]"
-systemctl enable --now libvirtd
-
-if [ ! -S /var/run/libvirt/libvirt-sock ]; then
-  echo "❌ Error: libvirt no está activo o el socket no existe. Abortando..."
-  exit 1
-fi
-
-
-
-
-
-    mkdir -p /etc/wireguard/keys /etc/wireguard/clients
-    chmod 700 /etc/wireguard
-    chmod 600 /etc/wireguard/keys/* 2>/dev/null || true
-
-    wg genkey | tee /etc/wireguard/keys/server_private.key | wg pubkey > /etc/wireguard/keys/server_public.key
-
-    server_priv=$(< /etc/wireguard/keys/server_private.key)
-    server_pub=$(< /etc/wireguard/keys/server_public.key)
-
-    cat <<EOF > /etc/wireguard/wg0.conf
-[Interface]
-Address = 10.8.0.1/24
-ListenPort = 51820
-PrivateKey = $server_priv
-SaveConfig = true
-EOF
-
-    mkdir -p /mnt/storage/wireguard_backups/qrcodes
-
-    for i in {1..10}; do
-      client="cliente$i"
-      priv_key=$(wg genkey)
-      pub_key=$(echo "$priv_key" | wg pubkey)
-      ip="10.8.0.$((i+1))"
-
-      echo "$priv_key" > /etc/wireguard/keys/${client}_private.key
-      echo "$pub_key"  > /etc/wireguard/keys/${client}_public.key
-
-      cat <<EOL >> /etc/wireguard/wg0.conf
-
-[Peer]
-PublicKey = $pub_key
-AllowedIPs = $ip/32
-EOL
-
-      cat <<EOC > /etc/wireguard/clients/${client}.conf
-[Interface]
-PrivateKey = $priv_key
-Address = $ip/24
-DNS = 1.1.1.1
-
-[Peer]
-PublicKey = $server_pub
-Endpoint = $(curl -s ifconfig.me):51820
-AllowedIPs = 0.0.0.0/0
-PersistentKeepalive = 25
-EOC
-
-      qrencode -o "/mnt/storage/wireguard_backups/qrcodes/${client}.png" < /etc/wireguard/clients/${client}.conf
-    done
-
-    sed -i 's/^#\?net.ipv4.ip_forward=.*/net.ipv4.ip_forward=1/' /etc/sysctl.conf
-    sysctl -p
-
-    systemctl enable wg-quick@wg0
-    systemctl start wg-quick@wg0
-
-    cp -r /etc/wireguard/* /mnt/storage/wireguard_backups/
-
-    if command -v ufw &>/dev/null; then
-      ufw allow 51820/udp
-    fi
-
-    log_wg "[✅ WireGuard configurado correctamente. Archivos y QR en /mnt/storage/wireguard_backups]"
-  fi
-else
-  log_wg "[🔎 Simulación: configuración de WireGuard omitida.]"
-fi
-
-
 
 # BLOQUE 12 — nstalación y configuración de Jellyfin + DLNA local + Refresco automático
 
@@ -187,20 +105,3 @@ if ! grep -q jellyfin_refresh /etc/crontab; then
   log "[✅ Refresco automático de biblioteca activado cada 15 min.]"
 fi
 
-# BLOQUE 13 — Actualización automática del sistema (semanal)
-log "[🛠️ Programando actualizaciones automáticas del sistema cada semana...]"
-
-AUTO_UPGRADE_SCRIPT="/usr/local/bin/system_weekly_upgrade.sh"
-CRON_FILE="/etc/cron.d/system_weekly_upgrade"
-
-cat <<'EOF' > "$AUTO_UPGRADE_SCRIPT"
-#!/bin/bash
-LOG="/var/log/fitandsetup/system_upgrade.log"
-echo "[🔧 $(date)] Iniciando actualización semanal del sistema..." >> "$LOG"
-apt update >> "$LOG" 2>&1
-apt upgrade -y >> "$LOG" 2>&1
-echo "[✅ $(date)] Actualización completada." >> "$LOG"
-EOF
-
-chmod +x "$AUTO_UPGRADE_SCRIPT"
-echo "0 4 * * 1 root $AUTO_UPGRADE_SCRIPT" > "$CRON_FILE"
