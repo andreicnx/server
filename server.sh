@@ -714,72 +714,61 @@ else
   log "[⚠️ MiniDLNA no se inició correctamente. Revisa $MINIDLNA_LOG]"
 fi
 
-# BLOQUE 12 — Servidor DLNA local con Jellyfin
-# BLOQUE — Instalación y configuración de Jellyfin como servidor DLNA
+# BLOQUE 12 — nstalación y configuración de Jellyfin + DLNA local + Refresco automático
 
 log "[🎞️ Instalando y configurando Jellyfin como servidor DLNA local...]"
 
+JELLYFIN_API_FILE="/etc/jellyfin_api.key"
 JELLYFIN_LOG="/var/log/fitandsetup/jellyfin.log"
-API_FILE="/etc/jellyfin/api_key"
 REFRESH_SCRIPT="/usr/local/bin/jellyfin_refresh.sh"
-JELLYFIN_MEDIA_DIR="/mnt/storage/X"
+VIDEO_PATH="/mnt/storage/X"
 
-mkdir -p "$(dirname "$JELLYFIN_LOG")"
-
-# Instalar Jellyfin solo si no está
+# Instalar Jellyfin si no está presente
 if ! dpkg -s jellyfin &>/dev/null; then
-  curl -fsSL https://repo.jellyfin.org/install-debuntu.sh | bash -s -- -y
+  curl -fsSL https://repo.jellyfin.org/install-debuntu.sh | bash -s -- -y <<< $'\n'
 fi
 
-systemctl enable jellyfin --now
-sleep 10
+# Esperar arranque y asegurar servicio
+sleep 15
+systemctl enable jellyfin
+systemctl start jellyfin
 
-# Obtener IP del servidor
-SERVER_IP=$(hostname -I | awk '{print $1}')
-JELLYFIN_URL="http://$SERVER_IP:8096"
+# Detectar IP local real conectada al router principal
+SERVER_IP=$(ip route get 1 | awk '{print $7; exit}')
+log "[✅ Jellyfin instalado y activo en http://$SERVER_IP:8096]"
 
-log "[✅ Jellyfin instalado y activo en $JELLYFIN_URL]"
+# Añadir carpeta de vídeos si no se ha hecho ya
+JELLYFIN_DATA="/var/lib/jellyfin/data/library/"
 
-# API KEY
-if [[ ! -f "$API_FILE" ]]; then
-  echo -e "\n🔑 Accede a Jellyfin en: $JELLYFIN_URL"
-  echo "→ Finaliza la configuración inicial"
-  echo "→ Ve a: Panel de control → API Keys → Nueva clave"
-  echo ""
+if [[ ! -d "$JELLYFIN_DATA" || ! $(grep "$VIDEO_PATH" "$JELLYFIN_DATA"/* 2>/dev/null) ]]; then
+  log "[📁 Añade manualmente la carpeta '$VIDEO_PATH' como biblioteca desde la interfaz web si es la primera vez.]"
+fi
 
-  read -p "¿Has creado ya la API Key? (sí / más adelante): " RESPUESTA
-  if [[ "$RESPUESTA" =~ ^[Ss][Íi]?$ ]]; then
-    read -p "Introduce la API Key: " API_KEY
-    echo "$API_KEY" > "$API_FILE"
-    chmod 600 "$API_FILE"
-    log "[🔐 API Key guardada en $API_FILE]"
+# Preguntar por la API si no está guardada
+if [[ ! -f "$JELLYFIN_API_FILE" ]]; then
+  echo -e "\n🔑 Para habilitar el refresco automático, necesitas crear una API Key en:"
+  echo "→ http://$SERVER_IP:8096"
+  echo "Finaliza la configuración inicial, luego ve a: Panel de control → API Keys → Nueva clave"
+  echo -n "¿Quieres introducir la API Key ahora? (s/n): "
+  read -r CONFIRM_API
+
+  if [[ "$CONFIRM_API" == "s" || "$CONFIRM_API" == "S" ]]; then
+    echo -n "Introduce la API Key: "
+    read -r API_KEY
+    echo "$API_KEY" > "$JELLYFIN_API_FILE"
+    chmod 600 "$JELLYFIN_API_FILE"
+    log "[✅ API Key guardada en $JELLYFIN_API_FILE]"
   else
     log "[⏩ Saltando refresco automático de biblioteca por ahora.]"
     exit 0
   fi
 fi
 
-API_KEY=$(< "$API_FILE")
-
-# Añadir carpeta si aún no existe
-EXISTE=$(curl -s "$JELLYFIN_URL/Library/VirtualFolders" -H "X-Emby-Token: $API_KEY")
-if ! echo "$EXISTE" | grep -q "$JELLYFIN_MEDIA_DIR"; then
-  curl -s -X POST "$JELLYFIN_URL/Library/VirtualFolders" \
-    -H "accept: application/json" \
-    -H "Content-Type: application/json" \
-    -H "X-Emby-Token: $API_KEY" \
-    -d '{
-      "Name": "Videos",
-      "Locations": ["'"$JELLYFIN_MEDIA_DIR"'"]
-    }' >> "$JELLYFIN_LOG"
-  log "[📁 Añadida biblioteca con carpeta: $JELLYFIN_MEDIA_DIR]"
-fi
-
 # Crear script de refresco automático
 cat <<EOF > "$REFRESH_SCRIPT"
 #!/bin/bash
-API_KEY="$API_KEY"
-HOST="$JELLYFIN_URL"
+API_KEY=\$(cat "$JELLYFIN_API_FILE")
+HOST="http://127.0.0.1:8096"
 
 if ! systemctl is-active --quiet jellyfin; then
   echo "[\$(date)] Jellyfin no estaba activo. Iniciando..." >> "$JELLYFIN_LOG"
@@ -792,10 +781,10 @@ EOF
 
 chmod +x "$REFRESH_SCRIPT"
 
-# Añadir a cron si no existe
+# Añadir cron si no está
 if ! grep -q jellyfin_refresh /etc/crontab; then
   echo "*/15 * * * * root $REFRESH_SCRIPT" >> /etc/crontab
-  log "[⏱️ Refresco automático de la biblioteca activado cada 15 minutos.]"
+  log "[✅ Refresco automático de biblioteca activado cada 15 min.]"
 fi
 
 # BLOQUE 13 — Actualización automática del sistema (semanal)
