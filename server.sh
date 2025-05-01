@@ -457,25 +457,31 @@ fi
 log "rsnapshot configurado con backups automáticos y limpieza inteligente."
 
 # BLOQUE 8 — VPN local con WireGuard
-log "[🔐 Configurando VPN local con WireGuard (10 clientes)...]"
+echo -e "\n==> BLOQUE 8 — VPN local con WireGuard (hasta 10 clientes)..."
+WG_LOG="/var/log/fitandsetup/wireguard.log"
+mkdir -p "$(dirname "$WG_LOG")"
+
+log_wg() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$WG_LOG"
+}
+
+log_wg "[🔐 Configurando VPN local con WireGuard (10 clientes)...]"
 
 if ! $is_simulation; then
-  # Verificar si ya está configurado
   if [[ -f /etc/wireguard/wg0.conf ]]; then
-    log "[⏩ WireGuard ya está configurado. Saltando.]"
+    log_wg "[⏩ WireGuard ya está configurado. Saltando.]"
   else
     apt install -y wireguard qrencode
 
     mkdir -p /etc/wireguard/keys /etc/wireguard/clients
     chmod 700 /etc/wireguard
+    chmod 600 /etc/wireguard/keys/* 2>/dev/null || true
 
-    # Generar claves del servidor
     wg genkey | tee /etc/wireguard/keys/server_private.key | wg pubkey > /etc/wireguard/keys/server_public.key
 
     server_priv=$(< /etc/wireguard/keys/server_private.key)
     server_pub=$(< /etc/wireguard/keys/server_public.key)
 
-    # Configuración del servidor
     cat <<EOF > /etc/wireguard/wg0.conf
 [Interface]
 Address = 10.8.0.1/24
@@ -484,8 +490,8 @@ PrivateKey = $server_priv
 SaveConfig = true
 EOF
 
-    # Generar configuración para 10 clientes
     mkdir -p /mnt/storage/wireguard_backups/qrcodes
+
     for i in {1..10}; do
       client="cliente$i"
       priv_key=$(wg genkey)
@@ -493,9 +499,8 @@ EOF
       ip="10.8.0.$((i+1))"
 
       echo "$priv_key" > /etc/wireguard/keys/${client}_private.key
-      echo "$pub_key" > /etc/wireguard/keys/${client}_public.key
+      echo "$pub_key"  > /etc/wireguard/keys/${client}_public.key
 
-      # Agregar al servidor
       cat <<EOL >> /etc/wireguard/wg0.conf
 
 [Peer]
@@ -503,7 +508,6 @@ PublicKey = $pub_key
 AllowedIPs = $ip/32
 EOL
 
-      # Crear archivo de configuración para el cliente
       cat <<EOC > /etc/wireguard/clients/${client}.conf
 [Interface]
 PrivateKey = $priv_key
@@ -517,33 +521,31 @@ AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 25
 EOC
 
-      # Guardar QR
       qrencode -o "/mnt/storage/wireguard_backups/qrcodes/${client}.png" < /etc/wireguard/clients/${client}.conf
     done
 
-    # Permitir reenvío de tráfico
-    sed -i 's/^#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/' /etc/sysctl.conf
+    sed -i 's/^#\?net.ipv4.ip_forward=.*/net.ipv4.ip_forward=1/' /etc/sysctl.conf
     sysctl -p
 
-    # Activar servicio
     systemctl enable wg-quick@wg0
     systemctl start wg-quick@wg0
 
-    # Copia de seguridad
     cp -r /etc/wireguard/* /mnt/storage/wireguard_backups/
 
-    # UFW si está presente
     if command -v ufw &>/dev/null; then
       ufw allow 51820/udp
     fi
 
-    log "[✅ WireGuard configurado y activo. QR guardados en wireguard_backups/qrcodes/]"
+    log_wg "[✅ WireGuard configurado correctamente. Archivos y QR en /mnt/storage/wireguard_backups]"
   fi
 else
-  log "[🔎 Simulación: se omitió configuración real de WireGuard.]"
+  log_wg "[🔎 Simulación: configuración de WireGuard omitida.]"
 fi
 
 # BLOQUE 9 — Backup automático de Home Assistant
+echo -e "\n==> BLOQUE 9 — Backup automático de Home Assistant..."
+HA_LOG="/var/log/fitandsetup/ha_vm_backup.log"
+mkdir -p "$(dirname "$HA_LOG")"
 
 log "[📦 Configurando backups automáticos de Home Assistant...]"
 
@@ -552,14 +554,12 @@ VM_NAME="home-assistant"
 MAX_BACKUPS=5
 CRON_JOB="/etc/cron.d/ha_vm_backup"
 
-# Comprobación si ya existe
 if [[ -f "$CRON_JOB" && -d "$BACKUP_DIR" ]]; then
   log "[⏩ Backup de Home Assistant ya configurado. Saltando.]"
 else
   if ! $is_simulation; then
     mkdir -p "$BACKUP_DIR"
 
-    # Script de backup
     cat <<'EOSCRIPT' > /usr/local/bin/ha_vm_backup.sh
 #!/bin/bash
 set -e
@@ -568,126 +568,57 @@ VM_NAME="home-assistant"
 BACKUP_DIR="/mnt/storage/homeassistant_backups"
 TMP_DIR="/tmp/ha_backup"
 MAX_BACKUPS=5
+VM_DISK="/mnt/storage/haos_vm/haos.qcow2"
+LOG="/var/log/fitandsetup/ha_vm_backup.log"
 
 timestamp=$(date +"%Y%m%d-%H%M%S")
 backup_name="backup_${timestamp}.tar"
-vm_disk="/mnt/storage/haos_vm/haos.qcow2"
 
-# Apagar VM temporalmente
-virsh domstate "$VM_NAME" | grep -q running && virsh shutdown "$VM_NAME" && sleep 10
-
-# Extraer backup desde la partición de datos de HAOS
-mkdir -p "$TMP_DIR"
-virt-copy-out -a "$vm_disk" /data/backup "$TMP_DIR"
-
-# Renombrar y mover al directorio final
-if [[ -d "$TMP_DIR/backup" ]]; then
-  tar -cf "$BACKUP_DIR/$backup_name" -C "$TMP_DIR/backup" .
-  echo "[$(date)] Backup creado: $backup_name" >> /var/log/fitandsetup/ha_vm_backup.log
+# Apagar la VM si está encendida
+if virsh domstate "$VM_NAME" | grep -q running; then
+  virsh shutdown "$VM_NAME"
+  sleep 10
 fi
 
-# Limpiar backups antiguos
+mkdir -p "$TMP_DIR"
+virt-copy-out -a "$VM_DISK" /data/backup "$TMP_DIR"
+
+if [[ -d "$TMP_DIR/backup" ]]; then
+  tar -cf "$BACKUP_DIR/$backup_name" -C "$TMP_DIR/backup" .
+  echo "[$(date)] Backup creado: $backup_name" >> "$LOG"
+fi
+
 cd "$BACKUP_DIR"
 ls -1tr backup_*.tar | head -n -$MAX_BACKUPS | xargs -r rm -f
 
-# Encender de nuevo la VM si estaba encendida
 virsh start "$VM_NAME" &>/dev/null || true
 
 rm -rf "$TMP_DIR"
+
 EOSCRIPT
 
     chmod +x /usr/local/bin/ha_vm_backup.sh
-
-    # Cron diario a las 3:00
     echo "0 3 * * * root /usr/local/bin/ha_vm_backup.sh" > "$CRON_JOB"
 
-    log "[✅ Backup de Home Assistant configurado. Se realizará cada noche a las 03:00.]"
+    log "[✅ Backup automático configurado. Se ejecutará cada noche a las 03:00.]"
+  else
+    log "[🔎 Simulación: no se configuró el backup de Home Assistant.]"
   fi
 fi
-
 # BLOQUE FINAL — Comprobación visual del sistema tras la instalación
-
+echo -e "\n==> BLOQUE 10 — Comprobación visual del sistema tras la instalación..."
 log "[🔍 Comprobación final del sistema...]"
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # Sin color
+CHECK_SCRIPT="/usr/local/bin/server_check.sh"
+CHECK_CRON="/etc/cron.d/server_check"
+CHECK_LOG="/var/log/fitandsetup/server_check.log"
 
-CHECKS_FAILED=0
-
-check() {
-  desc="$1"
-  shift
-  if "$@" &>/dev/null; then
-    echo -e "${GREEN}[✅]${NC} $desc"
-  else
-    echo -e "${YELLOW}[⚠️ ]${NC} $desc — ${RED}Falló${NC}"
-    ((CHECKS_FAILED++))
-  fi
-}
-
-echo -e "\n${YELLOW}--------[ 🧮 SISTEMA MONTADO ]--------${NC}"
-check "/mnt/storage montado" mountpoint -q /mnt/storage
-check "/mnt/backup montado" mountpoint -q /mnt/backup
-
-echo -e "\n${YELLOW}--------[ 🌐 DUCKDNS ]--------${NC}"
-check "Archivo de actualización existe" test -f /opt/duckdns/update.sh
-check "Timer duckdns activo" systemctl is-active --quiet duckdns.timer
-
-echo -e "\n${YELLOW}--------[ 🏠 HOME ASSISTANT VM ]--------${NC}"
-check "VM creada" virsh list --all | grep -q home-assistant
-check "Archivo de disco existe" test -f /mnt/storage/haos_vm/haos.qcow2
-
-echo -e "\n${YELLOW}--------[ 💾 TIME MACHINE ]--------${NC}"
-check "Carpeta timemachine existe" test -d /mnt/storage/timemachine
-check "Samba activo" systemctl is-active --quiet smbd
-
-echo -e "\n${YELLOW}--------[ 🔁 SYNC STORAGE → BACKUP ]--------${NC}"
-check "Script de sync existe" test -x /usr/local/bin/sync_storage_to_backup.sh
-check "Archivo .ultima_sync.txt generado" test -f /mnt/backup/.ultima_sync.txt
-
-echo -e "\n${YELLOW}--------[ 📸 SNAPSHOTS (rsnapshot) ]--------${NC}"
-check "Archivo de configuración rsnapshot existe" test -f /etc/rsnapshot.conf
-check "Snapshot 6h ejecuta correctamente" rsnapshot -t 6h
-check "Script limpieza existe" test -x /usr/local/bin/rsnapshot_cleanup_if_low_space.sh
-
-echo -e "\n${YELLOW}--------[ 🛡️ VPN LOCAL (WIREGUARD) ]--------${NC}"
-check "Archivo wg0.conf existe" test -f /etc/wireguard/wg0.conf
-check "Claves del servidor generadas" test -f /etc/wireguard/keys/server_private.key
-check "10 clientes configurados" bash -c 'ls /etc/wireguard/clients/cliente*.conf 2>/dev/null | wc -l | grep -q 10'
-check "Códigos QR generados" bash -c 'ls /mnt/storage/wireguard_backups/qrcodes/cliente*.png 2>/dev/null | wc -l | grep -q 10'
-check "Servicio wg-quick@wg0 activo" systemctl is-active --quiet wg-quick@wg0
-
-echo -e "\n${YELLOW}--------[ 🗃️ BACKUPS HOME ASSISTANT ]--------${NC}"
-check "Carpeta de backups existe" test -d /mnt/storage/homeassistant_backups
-check "Script de backup existe" test -x /usr/local/bin/ha_vm_backup.sh
-check "Al menos 1 backup creado" bash -c 'ls /mnt/storage/homeassistant_backups/backup_*.tar 2>/dev/null | grep -q .'
-check "Log de backup existe" test -f /var/log/fitandsetup/ha_vm_backup.log
-
-echo -e "\n${YELLOW}--------[ 📂 LOGS DISPONIBLES ]--------${NC}"
-echo -e "${GREEN}  - /var/log/fitandsetup/general.log"
-echo -e "  - /var/log/fitandsetup/ha_vm.log"
-echo -e "  - /var/log/fitandsetup/backup_sync.log"
-echo -e "  - /var/log/fitandsetup/rsnapshot_cleanup.log"
-echo -e "  - /var/log/fitandsetup/server_check.log${NC}"
-
-if [[ $CHECKS_FAILED -eq 0 ]]; then
-  echo -e "\n${GREEN}[✅ TODO OK] Instalación y verificación completas.${NC}"
+if [[ -f "$CHECK_SCRIPT" && -f "$CHECK_CRON" ]]; then
+  log "[⏩ Script de verificación ya presente. Saltando.]"
 else
-  echo -e "\n${YELLOW}[⚠️ $CHECKS_FAILED chequeos fallaron] Revisa arriba o en los logs para más detalle.${NC}"
-fi
-
-log "[🕒 Instalando verificación automática del sistema cada 6 horas...]"
-
-cat <<'EOF' > /usr/local/bin/server_check.sh
+  cat <<'EOF' > "$CHECK_SCRIPT"
 #!/bin/bash
 LOG="/var/log/fitandsetup/server_check.log"
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
-
 timestamp="[🕒 $(date +'%Y-%m-%d %H:%M:%S')]"
 
 {
@@ -737,5 +668,7 @@ timestamp="[🕒 $(date +'%Y-%m-%d %H:%M:%S')]"
 } >> "$LOG"
 EOF
 
-chmod +x /usr/local/bin/server_check.sh
-echo "0 */6 * * * root /usr/local/bin/server_check.sh" > /etc/cron.d/server_check
+  chmod +x "$CHECK_SCRIPT"
+  echo "0 */6 * * * root $CHECK_SCRIPT" > "$CHECK_CRON"
+  log "[✅ Script de verificación creado y programado cada 6h.]"
+fi
