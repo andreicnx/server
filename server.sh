@@ -60,7 +60,7 @@ if [[ -z "$API_KEY" ]]; then
     log "[✅ API Key guardada.]"
   else
     log "[⏩ Saltando refresco automático de biblioteca por ahora.]"
-    return 0
+    exit 0
   fi
 fi
 
