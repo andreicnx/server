@@ -442,3 +442,57 @@ if [[ $CHECKS_FAILED -eq 0 ]]; then
 else
   echo -e "\n${YELLOW}[⚠️ $CHECKS_FAILED chequeos fallaron] Revisa arriba o en los logs para más detalle.${NC}"
 fi
+log "[🕒 Instalando verificación automática del sistema cada 6 horas...]"
+
+cat <<'EOF' > /usr/local/bin/server_check.sh
+#!/bin/bash
+LOG="/var/log/fitandsetup/server_check.log"
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+timestamp="[🕒 \$(date +'%Y-%m-%d %H:%M:%S')]"
+
+{
+  echo "\$timestamp INICIO DE COMPROBACIÓN DEL SISTEMA"
+  CHECKS_FAILED=0
+
+  check() {
+    desc="\$1"
+    shift
+    if "\$@" &>/dev/null; then
+      echo "[✅] \$desc"
+    else
+      echo "[⚠️ ] \$desc — FALLÓ"
+      ((CHECKS_FAILED++))
+    fi
+  }
+
+  check "/mnt/storage montado" mountpoint -q /mnt/storage
+  check "/mnt/backup montado" mountpoint -q /mnt/backup
+  check "DuckDNS activo" systemctl is-active --quiet duckdns.timer
+  check "VM Home Assistant creada" virsh list --all | grep -q home-assistant
+  check "Disco HAOS existe" test -f /mnt/storage/haos_vm/haos.qcow2
+  check "Carpeta timemachine" test -d /mnt/storage/timemachine
+  check "Samba activo" systemctl is-active --quiet smbd
+  check "Sync manual existe" test -x /usr/local/bin/sync_storage_to_backup.sh
+  check "Última sync registrada" test -f /mnt/backup/.ultima_sync.txt
+  check "Config rsnapshot" test -f /etc/rsnapshot.conf
+  check "rsnapshot ejecuta" rsnapshot -t 6h
+  check "Script limpieza existe" test -x /usr/local/bin/rsnapshot_cleanup_if_low_space.sh
+
+  if [[ \$CHECKS_FAILED -eq 0 ]]; then
+    echo "[✅ TODO OK] Verificación correcta."
+  else
+    echo "[⚠️ \$CHECKS_FAILED fallos] Revisa manualmente."
+  fi
+
+  echo ""
+} >> "\$LOG"
+EOF
+
+chmod +x /usr/local/bin/server_check.sh
+
+# Cron cada 6h
+echo "0 */6 * * * root /usr/local/bin/server_check.sh" > /etc/cron.d/server_check
