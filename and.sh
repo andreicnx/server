@@ -5,6 +5,7 @@ set -e
 LOG_DIR="/var/log/fitandsetup"
 mkdir -p "$LOG_DIR"
 
+
 log() {
   echo -e "[$(date +'%F %T')] $1" | tee -a "$LOG_DIR/general.log"
 }
