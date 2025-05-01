@@ -382,6 +382,92 @@ fi
 
 log "rsnapshot configurado con backups automáticos y limpieza inteligente."
 
+# BLOQUE 8 — VPN local con WireGuard
+log "[🔐 Configurando VPN local con WireGuard (10 clientes)...]"
+
+if ! $is_simulation; then
+  # Verificar si ya está configurado
+  if [[ -f /etc/wireguard/wg0.conf ]]; then
+    log "[⏩ WireGuard ya está configurado. Saltando.]"
+  else
+    apt install -y wireguard qrencode
+
+    mkdir -p /etc/wireguard/keys /etc/wireguard/clients
+    chmod 700 /etc/wireguard
+
+    # Generar claves del servidor
+    wg genkey | tee /etc/wireguard/keys/server_private.key | wg pubkey > /etc/wireguard/keys/server_public.key
+
+    server_priv=$(< /etc/wireguard/keys/server_private.key)
+    server_pub=$(< /etc/wireguard/keys/server_public.key)
+
+    # Configuración del servidor
+    cat <<EOF > /etc/wireguard/wg0.conf
+[Interface]
+Address = 10.8.0.1/24
+ListenPort = 51820
+PrivateKey = $server_priv
+SaveConfig = true
+EOF
+
+    # Generar configuración para 10 clientes
+    mkdir -p /mnt/storage/wireguard_backups/qrcodes
+    for i in {1..10}; do
+      client="cliente$i"
+      priv_key=$(wg genkey)
+      pub_key=$(echo "$priv_key" | wg pubkey)
+      ip="10.8.0.$((i+1))"
+
+      echo "$priv_key" > /etc/wireguard/keys/${client}_private.key
+      echo "$pub_key" > /etc/wireguard/keys/${client}_public.key
+
+      # Agregar al servidor
+      cat <<EOL >> /etc/wireguard/wg0.conf
+
+[Peer]
+PublicKey = $pub_key
+AllowedIPs = $ip/32
+EOL
+
+      # Crear archivo de configuración para el cliente
+      cat <<EOC > /etc/wireguard/clients/${client}.conf
+[Interface]
+PrivateKey = $priv_key
+Address = $ip/24
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = $server_pub
+Endpoint = $(curl -s ifconfig.me):51820
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 25
+EOC
+
+      # Guardar QR
+      qrencode -o "/mnt/storage/wireguard_backups/qrcodes/${client}.png" < /etc/wireguard/clients/${client}.conf
+    done
+
+    # Permitir reenvío de tráfico
+    sed -i 's/^#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/' /etc/sysctl.conf
+    sysctl -p
+
+    # Activar servicio
+    systemctl enable wg-quick@wg0
+    systemctl start wg-quick@wg0
+
+    # Copia de seguridad
+    cp -r /etc/wireguard/* /mnt/storage/wireguard_backups/
+
+    # UFW si está presente
+    if command -v ufw &>/dev/null; then
+      ufw allow 51820/udp
+    fi
+
+    log "[✅ WireGuard configurado y activo. QR guardados en wireguard_backups/qrcodes/]"
+  fi
+else
+  log "[🔎 Simulación: se omitió configuración real de WireGuard.]"
+fi
 
 # BLOQUE FINAL — Comprobación visual del sistema tras la instalación
 
