@@ -675,7 +675,118 @@ EOF
   log "[✅ Script de verificación creado y programado cada 6h.]"
 fi
 
-# BLOQUE 11 — Actualización automática del sistema (semanal)
+# BLOQUE 11 — Servidor DLNA (MiniDLNA) configurado para /mnt/storage/X sin scraping
+
+log "[📺 Instalando y configurando servidor DLNA (MiniDLNA)...]"
+
+DLNA_DIR="/mnt/storage/X"
+CONF_FILE="/etc/minidlna.conf"
+SERVICE_FILE="minidlna"
+
+# Instalar MiniDLNA si no está
+if ! dpkg -s minidlna &>/dev/null; then
+  apt update && apt install -y minidlna
+fi
+
+# Crear directorio si no existe
+mkdir -p "$DLNA_DIR"
+
+# Configurar minidlna.conf
+sed -i "s|^media_dir=.*|media_dir=V,$DLNA_DIR|" "$CONF_FILE"
+sed -i "s|^#friendly_name=.*|friendly_name=Servidor DLNA Local|" "$CONF_FILE"
+sed -i "s|^#inotify=.*|inotify=yes|" "$CONF_FILE"
+sed -i "s|^#notify_interval=.*|notify_interval=30|" "$CONF_FILE"
+sed -i "s|^#root_container=.*|root_container=V|" "$CONF_FILE"
+
+# Reiniciar servicio
+systemctl enable "$SERVICE_FILE"
+systemctl restart "$SERVICE_FILE"
+
+log "[✅ DLNA activo. Accede desde Chromecast, TV o apps compatibles en la red local.]"
+
+# BLOQUE 12 — Servidor DLNA local con Jellyfin
+log "[🎞️ Instalando y configurando Jellyfin como servidor DLNA local...]"
+
+JELLYFIN_LOG="/var/log/fitandsetup/jellyfin.log"
+REFRESH_SCRIPT="/usr/local/bin/jellyfin_refresh.sh"
+CONFIG_FILE="/etc/fitandsetup/jellyfin.conf"
+LIBRARY_PATH="/mnt/storage/X"
+PORT=8096
+IP_LOCAL=$(hostname -I | awk '{print $1}')
+HOST="http://$IP_LOCAL:$PORT"
+
+mkdir -p "$(dirname "$JELLYFIN_LOG")" /etc/fitandsetup
+
+# Instalar Jellyfin si no está
+if ! dpkg -s jellyfin &>/dev/null; then
+  curl -fsSL https://repo.jellyfin.org/install-debuntu.sh | bash
+  apt update && apt install -y jellyfin
+  systemctl enable jellyfin
+  systemctl start jellyfin
+  log "[✅ Jellyfin instalado y activo en $HOST]"
+else
+  log "[⏩ Jellyfin ya instalado. Saltando instalación.]"
+fi
+
+# Abrir puerto en UFW si está activo
+if command -v ufw &>/dev/null && ufw status | grep -q active; then
+  ufw allow $PORT/tcp
+fi
+
+# Verificar clave API existente
+API_KEY=""
+if [[ -f "$CONFIG_FILE" ]]; then
+  source "$CONFIG_FILE"
+fi
+
+if [[ -z "$API_KEY" ]]; then
+  echo
+  echo "🧩 Abre Jellyfin en tu navegador y crea una API Key de administrador:"
+  echo "   → $HOST"
+  echo "   Panel de control → API Keys → Nueva clave"
+  echo
+  read -p "¿Quieres introducir ahora la API Key? (s/n): " confirmar
+  if [[ "$confirmar" =~ ^[sS]$ ]]; then
+    read -rp "Introduce la API Key de Jellyfin: " API_KEY
+    echo "API_KEY=\"$API_KEY\"" > "$CONFIG_FILE"
+    log "[✅ API Key guardada en $CONFIG_FILE]"
+  else
+    log "[⏩ Saltando configuración del refresco automático por ahora.]"
+    exit 0
+  fi
+fi
+
+# Crear script de actualización si no existe
+if [[ ! -f "$REFRESH_SCRIPT" ]]; then
+  cat <<EOF > "$REFRESH_SCRIPT"
+#!/bin/bash
+API_KEY="$API_KEY"
+HOST="$HOST"
+
+if ! systemctl is-active --quiet jellyfin; then
+  echo "[\$(date)] Jellyfin no estaba activo. Iniciando..." >> "$JELLYFIN_LOG"
+  systemctl start jellyfin
+  sleep 10
+fi
+
+curl -s -X POST "\$HOST/Library/Refresh" -H "X-Emby-Token: \$API_KEY" >> "$JELLYFIN_LOG"
+EOF
+
+  chmod +x "$REFRESH_SCRIPT"
+  log "[✅ Script de refresco creado en $REFRESH_SCRIPT]"
+else
+  log "[⏩ Script de refresco ya existe. Saltando.]"
+fi
+
+# Añadir cron si no existe
+if ! grep -q jellyfin_refresh /etc/crontab; then
+  echo "*/15 * * * * root $REFRESH_SCRIPT" >> /etc/crontab
+  log "[✅ Cron programado para actualizar la biblioteca cada 15 minutos.]"
+else
+  log "[⏩ Cron para refresco ya presente. Saltando.]"
+fi
+
+# BLOQUE 13 — Actualización automática del sistema (semanal)
 log "[🛠️ Programando actualizaciones automáticas del sistema cada semana...]"
 
 AUTO_UPGRADE_SCRIPT="/usr/local/bin/system_weekly_upgrade.sh"
