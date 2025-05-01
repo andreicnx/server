@@ -585,6 +585,12 @@ check "10 clientes configurados" bash -c 'ls /etc/wireguard/clients/cliente*.con
 check "Códigos QR generados" bash -c 'ls /mnt/storage/wireguard_backups/qrcodes/cliente*.png 2>/dev/null | wc -l | grep -q 10'
 check "Servicio wg-quick@wg0 activo" systemctl is-active --quiet wg-quick@wg0
 
+echo -e "\n${YELLOW}--------[ 🗃️ BACKUPS HOME ASSISTANT ]--------${NC}"
+check "Carpeta de backups existe" test -d /mnt/storage/homeassistant_backups
+check "Script de backup existe" test -x /usr/local/bin/ha_vm_backup.sh
+check "Al menos 1 backup creado" bash -c 'ls /mnt/storage/homeassistant_backups/backup_*.tar 2>/dev/null | grep -q .'
+check "Log de backup existe" test -f /var/log/fitandsetup/ha_vm_backup.log
+
 echo -e "\n${YELLOW}--------[ 📂 LOGS DISPONIBLES ]--------${NC}"
 echo -e "${GREEN}  - /var/log/fitandsetup/general.log"
 echo -e "  - /var/log/fitandsetup/ha_vm.log"
@@ -642,6 +648,10 @@ timestamp="[🕒 $(date +'%Y-%m-%d %H:%M:%S')]"
   check "10 clientes configurados" bash -c 'ls /etc/wireguard/clients/cliente*.conf 2>/dev/null | wc -l | grep -q 10'
   check "Códigos QR generados" bash -c 'ls /mnt/storage/wireguard_backups/qrcodes/cliente*.png 2>/dev/null | wc -l | grep -q 10'
   check "Servicio wg-quick@wg0 activo" systemctl is-active --quiet wg-quick@wg0
+  check "Carpeta de backups existe" test -d /mnt/storage/homeassistant_backups
+  check "Script de backup existe" test -x /usr/local/bin/ha_vm_backup.sh
+  check "Al menos 1 backup creado" bash -c 'ls /mnt/storage/homeassistant_backups/backup_*.tar 2>/dev/null | grep -q .'
+  check "Log de backup existe" test -f /var/log/fitandsetup/ha_vm_backup.log
 
   if [[ $CHECKS_FAILED -eq 0 ]]; then
     echo "[✅ TODO OK] Verificación correcta."
