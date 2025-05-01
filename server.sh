@@ -273,38 +273,59 @@ else
     echo "[✅] Bridge br0 detectado. Será usado como interfaz de red para la VM."
 fi
 
-# BLOQUE 5 — Creación limpia de la VM Home Assistant con log aislado
-log "[🔁 Reinstalando la máquina virtual de Home Assistant...]"
+# BLOQUE 5 — Instalación limpia de Home Assistant en disco dedicado
 
-HA_LOG="/var/log/fitandsetup/ha_vm.log"
-HA_DIR="/mnt/storage/haos_vm"
-HA_DISK="$HA_DIR/haos.qcow2"
+log "[🔁 Reinstalando Home Assistant desde cero en disco exclusivo...]"
+
+# Montar disco dedicado a Home Assistant por label
+HOME_DISK_LABEL="home"
+HOME_MOUNT_POINT="/mnt/home"
+
+if ! mountpoint -q "$HOME_MOUNT_POINT"; then
+  log "[💽 Montando disco dedicado para Home Assistant en $HOME_MOUNT_POINT...]"
+  mkdir -p "$HOME_MOUNT_POINT"
+  echo "LABEL=$HOME_DISK_LABEL $HOME_MOUNT_POINT ext4 defaults 0 2" >> /etc/fstab
+  mount "$HOME_MOUNT_POINT"
+  log "[✅ Disco montado correctamente en $HOME_MOUNT_POINT]"
+else
+  log "[⏩ Disco dedicado ya montado en $HOME_MOUNT_POINT. Saltando.]"
+fi
+
+HA_DISK="$HOME_MOUNT_POINT/haos.qcow2"
 HA_VM="home-assistant"
+HA_LOG="/var/log/fitandsetup/ha_vm.log"
 
-# Eliminar VM y disco si existen
+# Eliminar VM y disco previos si existen
 if virsh list --all | grep -q "$HA_VM"; then
-  log "[🧨 Eliminando VM existente y su disco...]"
+  log "[🧨 Eliminando VM existente...]"
   virsh destroy "$HA_VM" &>/dev/null || true
   virsh undefine "$HA_VM" --nvram &>/dev/null || true
 fi
 
-mkdir -p "$HA_DIR"
+if [[ -f "$HA_DISK" ]]; then
+  log "[🧹 Eliminando disco anterior: $HA_DISK]"
+  rm -f "$HA_DISK"
+fi
 
+# Eliminar backups y snapshots anteriores
+log "[🧹 Eliminando backups y snapshots anteriores de Home Assistant...]"
+rm -rf /mnt/storage/homeassistant_backups
+rm -rf /mnt/storage/rsnapshot
+
+mkdir -p "$(dirname "$HA_DISK")"
+
+# Descargar imagen oficial más reciente
 log "[⬇️ Buscando la última imagen de HAOS en formato .qcow2.xz...]"
 HA_URL=$(curl -s https://api.github.com/repos/home-assistant/operating-system/releases/latest \
-  | grep "haos_ova-.*\.qcow2\.xz" \
-  | grep "browser_download_url" \
-  | cut -d '"' -f 4)
+  | grep "browser_download_url" | grep "haos_ova-.*\.qcow2\.xz" | cut -d '"' -f 4)
 
 log "[⬇️ Descargando imagen desde: $HA_URL]"
-curl -L -o "$HA_DISK.xz" "$HA_URL"
-
-log "[📦 Eliminando archivo anterior descomprimido (si existe)...]"
-rm -f "$HA_DISK"
+curl -L -o "${HA_DISK}.xz" "$HA_URL"
 
 log "[📦 Descomprimiendo imagen...]"
-xz -d "$HA_DISK.xz"
+xz -d "${HA_DISK}.xz"
 
+# Crear VM
 log "[⚙️ Creando VM con libvirt...]"
 virt-install \
   --name "$HA_VM" \
@@ -545,68 +566,61 @@ else
 fi
 
 # BLOQUE 9 — Backup automático de Home Assistant
-echo -e "\n==> BLOQUE 9 — Backup automático de Home Assistant..."
-HA_LOG="/var/log/fitandsetup/ha_vm_backup.log"
-mkdir -p "$(dirname "$HA_LOG")"
-
 log "[📦 Configurando backups automáticos de Home Assistant...]"
 
 BACKUP_DIR="/mnt/storage/homeassistant_backups"
 VM_NAME="home-assistant"
 MAX_BACKUPS=5
 CRON_JOB="/etc/cron.d/ha_vm_backup"
+HA_DISK="/mnt/home/haos.qcow2"
+BACKUP_SCRIPT="/usr/local/bin/ha_vm_backup.sh"
+LOG_FILE="/var/log/fitandsetup/ha_vm_backup.log"
 
-if [[ -f "$CRON_JOB" && -d "$BACKUP_DIR" ]]; then
+if [[ -f "$CRON_JOB" && -f "$BACKUP_SCRIPT" ]]; then
   log "[⏩ Backup de Home Assistant ya configurado. Saltando.]"
 else
-  if ! $is_simulation; then
-    mkdir -p "$BACKUP_DIR"
+  mkdir -p "$BACKUP_DIR"
 
-    cat <<'EOSCRIPT' > /usr/local/bin/ha_vm_backup.sh
+  cat <<EOSCRIPT > "$BACKUP_SCRIPT"
 #!/bin/bash
 set -e
 
-VM_NAME="home-assistant"
-BACKUP_DIR="/mnt/storage/homeassistant_backups"
+VM_NAME="$VM_NAME"
+BACKUP_DIR="$BACKUP_DIR"
 TMP_DIR="/tmp/ha_backup"
-MAX_BACKUPS=5
-VM_DISK="/mnt/storage/haos_vm/haos.qcow2"
-LOG="/var/log/fitandsetup/ha_vm_backup.log"
+MAX_BACKUPS=$MAX_BACKUPS
+HA_DISK="$HA_DISK"
+LOG="$LOG_FILE"
 
-timestamp=$(date +"%Y%m%d-%H%M%S")
-backup_name="backup_${timestamp}.tar"
+timestamp=\$(date +"%Y%m%d-%H%M%S")
+backup_name="backup_\${timestamp}.tar"
 
-# Apagar la VM si está encendida
-if virsh domstate "$VM_NAME" | grep -q running; then
-  virsh shutdown "$VM_NAME"
+if virsh domstate "\$VM_NAME" | grep -q running; then
+  virsh shutdown "\$VM_NAME"
   sleep 10
 fi
 
-mkdir -p "$TMP_DIR"
-virt-copy-out -a "$VM_DISK" /data/backup "$TMP_DIR"
+mkdir -p "\$TMP_DIR"
+virt-copy-out -a "\$HA_DISK" /data/backup "\$TMP_DIR"
 
-if [[ -d "$TMP_DIR/backup" ]]; then
-  tar -cf "$BACKUP_DIR/$backup_name" -C "$TMP_DIR/backup" .
-  echo "[$(date)] Backup creado: $backup_name" >> "$LOG"
+if [[ -d "\$TMP_DIR/backup" ]]; then
+  tar -cf "\$BACKUP_DIR/\$backup_name" -C "\$TMP_DIR/backup" .
+  echo "[\$(date)] Backup creado: \$backup_name" >> "\$LOG"
 fi
 
-cd "$BACKUP_DIR"
-ls -1tr backup_*.tar | head -n -$MAX_BACKUPS | xargs -r rm -f
+cd "\$BACKUP_DIR"
+ls -1tr backup_*.tar | head -n -\$MAX_BACKUPS | xargs -r rm -f
 
-virsh start "$VM_NAME" &>/dev/null || true
-
-rm -rf "$TMP_DIR"
-
+virsh start "\$VM_NAME" &>/dev/null || true
+rm -rf "\$TMP_DIR"
 EOSCRIPT
 
-    chmod +x /usr/local/bin/ha_vm_backup.sh
-    echo "0 3 * * * root /usr/local/bin/ha_vm_backup.sh" > "$CRON_JOB"
+  chmod +x "$BACKUP_SCRIPT"
 
-    log "[✅ Backup automático configurado. Se ejecutará cada noche a las 03:00.]"
-  else
-    log "[🔎 Simulación: no se configuró el backup de Home Assistant.]"
-  fi
+  echo "0 3 * * * root $BACKUP_SCRIPT" > "$CRON_JOB"
+  log "[✅ Backup automático configurado. Se realizará cada noche a las 03:00.]"
 fi
+
 # BLOQUE 10 — Comprobación visual del sistema tras la instalación
 echo -e "\n==> BLOQUE 10 — Comprobación visual del sistema tras la instalación..."
 log "[🔍 Comprobación final del sistema...]"
@@ -642,7 +656,9 @@ timestamp="[🕒 $(date +'%Y-%m-%d %H:%M:%S')]"
   check "/mnt/backup montado" mountpoint -q /mnt/backup
   check "DuckDNS activo" systemctl is-active --quiet duckdns.timer
   check "VM Home Assistant creada" virsh list --all | grep -q home-assistant
-  check "Disco HAOS existe" test -f /mnt/storage/haos_vm/haos.qcow2
+  check "Disco HAOS existe" test -f /mnt/home/haos.qcow2
+  check "Montaje de /mnt/home correcto" mountpoint -q /mnt/home
+  check "Espacio libre en /mnt/home suficiente (>1GB)" bash -c '[[ $(df /mnt/home | awk "NR==2 {print \$4}") -gt 1048576 ]]'
   check "Carpeta timemachine" test -d /mnt/storage/timemachine
   check "Samba activo" systemctl is-active --quiet smbd
   check "Sync manual existe" test -x /usr/local/bin/sync_storage_to_backup.sh
