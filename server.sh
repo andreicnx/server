@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# BLOQUE 0
+# BLOQUE 0.0
 set -e
 LOG_DIR="/var/log/fitandsetup"
 mkdir -p "$LOG_DIR"
@@ -8,6 +8,19 @@ mkdir -p "$LOG_DIR"
 log() {
   echo -e "[$(date +'%F %T')] $1" | tee -a "$LOG_DIR/general.log"
 }
+
+# BLOQUE 0 — Autodescarga y relanzamiento desde copia local
+if [[ "$1" != "--skip-download" ]]; then
+  SCRIPT_PATH="/usr/local/bin/fitandsetup.sh"
+
+  echo "[🧩 Descargando copia local del script para futuras ejecuciones...]"
+  curl -fsSL https://raw.githubusercontent.com/andreicnx/server/main/server.sh -o "$SCRIPT_PATH"
+  chmod +x "$SCRIPT_PATH"
+
+  echo "[⏩ Ejecutando desde copia local. Este bloque ya no se volverá a ejecutar.]"
+  exec sudo bash "$SCRIPT_PATH" --skip-download
+  exit 0
+fi
 
 
 # 3. Instalar Jellyfin automáticamente sin confirmación
