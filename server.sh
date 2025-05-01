@@ -318,18 +318,24 @@ virt-install \
 
 log_ha "✅ Máquina virtual Home Assistant creada correctamente."
 
-# BLOQUE 6 — Configuración de Time Machine vía Samba con autodetección
+echo -e "\n==> BLOQUE 6 — Configuración de Time Machine vía Samba con autodetección..."
+TM_LOG="/var/log/fitandsetup/timemachine.log"
+mkdir -p "$(dirname "$TM_LOG")"
 
-log "Configurando soporte para Time Machine..."
+log_tm() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$TM_LOG"
+}
+
+log_tm "Configurando soporte para Time Machine..."
 
 backup_share="[TimeMachine]"
-backup_path="$mnt_storage/timemachine"
+backup_path="/mnt/storage/timemachine"
 smb_conf="/etc/samba/smb.conf"
 samba_needs_restart=false
 
 # Instalar samba si no está
 if ! dpkg -s samba &>/dev/null; then
-  log "[📦 Instalando Samba...]"
+  log_tm "[📦 Instalando Samba...]"
   apt update && apt install -y samba
   samba_needs_restart=true
 fi
@@ -337,10 +343,11 @@ fi
 # Crear carpeta de respaldo si no existe
 if [[ ! -d "$backup_path" ]]; then
   mkdir -p "$backup_path"
+  log_tm "📁 Carpeta '$backup_path' creada."
 fi
 
 # Añadir bloque a smb.conf si no existe
-if ! grep -q "$backup_share" "$smb_conf"; then
+if ! grep -qF "$backup_share" "$smb_conf"; then
   cat <<EOL >> "$smb_conf"
 
 $backup_share
@@ -352,16 +359,19 @@ $backup_share
    fruit:time machine = yes
    spotlight = no
 EOL
+  log_tm "📝 Bloque '$backup_share' añadido a smb.conf."
   samba_needs_restart=true
+else
+  log_tm "⏩ El bloque '$backup_share' ya existe en smb.conf. Saltando."
 fi
 
 # Reiniciar Samba solo si hubo cambios
 if $samba_needs_restart; then
-  log "[🔄 Reiniciando Samba...]"
+  log_tm "[🔄 Reiniciando Samba...]"
   systemctl restart smbd
 fi
 
-log "Time Machine compartido como '$(hostname).local' y activo."
+log_tm "✅ Time Machine compartido como '$(hostname).local' y activo."
 
 # BLOQUE 7 — Snapshots automáticos con rsnapshot (con autodetección)
 
