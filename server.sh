@@ -211,42 +211,52 @@ fi
 log "Sincronización activa cada hora y ejecutable manualmente con:"
 log "sudo /usr/local/bin/sync_storage_to_backup.sh"
 
-# BLOQUE 4.5 — Configuración del bridge de red (br0) para la VM
-if grep -q "==> BLOQUE 4.5 COMPLETADO" /var/log/fitandsetup/ha_vm.log; then
-    echo "==> BLOQUE 4.5 ya ejecutado previamente. Saltando..." | tee -a /var/log/fitandsetup/ha_vm.log
+echo -e "\n==> BLOQUE 4.5 — Configuración segura del bridge de red br0..."
+BRIDGE_LOG="/var/log/fitandsetup/bridge.log"
+mkdir -p "$(dirname "$BRIDGE_LOG")"
+
+log_bridge() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$BRIDGE_LOG"
+}
+
+INTERFAZ=$(ip route | grep default | awk '{print $5}')
+NETPLAN_FILE=$(find /etc/netplan -type f -name "*.yaml" | head -n 1)
+BACKUP_FILE="${NETPLAN_FILE}.backup-before-bridge"
+
+if grep -q "br0" "$NETPLAN_FILE"; then
+    log_bridge "⏩ El bridge br0 ya está configurado en $NETPLAN_FILE. Saltando."
 else
-    echo "==> BLOQUE 4.5 — Configuración del bridge de red br0..." | tee -a /var/log/fitandsetup/ha_vm.log
+    log_bridge "🧩 Creando configuración de red con bridge br0 usando $INTERFAZ..."
 
-    if ! ip link show br0 &>/dev/null; then
-        nmcli connection add type bridge ifname br0 con-name br0 autoconnect yes
-        nmcli connection modify br0 ipv4.method auto ipv6.method ignore
-        echo "Bridge br0 creado." | tee -a /var/log/fitandsetup/ha_vm.log
+    cp "$NETPLAN_FILE" "$BACKUP_FILE"
+    log_bridge "💾 Copia de seguridad creada: $BACKUP_FILE"
+
+    cat <<EOF > "$NETPLAN_FILE"
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    $INTERFAZ:
+      dhcp4: no
+  bridges:
+    br0:
+      interfaces: [$INTERFAZ]
+      dhcp4: true
+      parameters:
+        stp: false
+        forward-delay: 0
+EOF
+
+    if netplan apply 2>/tmp/netplan_error.log; then
+        log_bridge "✅ Bridge br0 aplicado correctamente."
     else
-        echo "El bridge br0 ya existe." | tee -a /var/log/fitandsetup/ha_vm.log
+        log_bridge "❌ Error al aplicar Netplan. Restaurando configuración anterior..."
+        mv "$BACKUP_FILE" "$NETPLAN_FILE"
+        netplan apply
+        log_bridge "⚠️ Error de Netplan:"
+        cat /tmp/netplan_error.log | tee -a "$BRIDGE_LOG"
+        log_bridge "✅ Configuración original restaurada."
     fi
-
-    if ! nmcli -g connection.master device show eno1 | grep -q '^br0$'; then
-        echo "Esclavizando eno1 a br0..." | tee -a /var/log/fitandsetup/ha_vm.log
-        nmcli connection modify eno1 master br0 slave-type bridge
-        nmcli connection down eno1 || true
-        nmcli connection up eno1
-    else
-        echo "eno1 ya está esclavizado a br0. Saltando configuración." | tee -a /var/log/fitandsetup/ha_vm.log
-    fi
-
-    nmcli connection up br0 || true
-
-    for i in {1..10}; do
-        state=$(cat /sys/class/net/br0/operstate)
-        if [[ "$state" == "up" ]]; then
-            echo "Bridge br0 activo." | tee -a /var/log/fitandsetup/ha_vm.log
-            break
-        fi
-        echo "Esperando a que br0 esté activo... ($i)" | tee -a /var/log/fitandsetup/ha_vm.log
-        sleep 1
-    done
-
-    echo "==> BLOQUE 4.5 COMPLETADO" | tee -a /var/log/fitandsetup/ha_vm.log
 fi
 
 # BLOQUE X — Configuración segura del bridge br0 con rollback si falla
