@@ -1,5 +1,14 @@
 #!/bin/bash
 
+# BLOQUE 0
+set -e
+LOG_DIR="/var/log/fitandsetup"
+mkdir -p "$LOG_DIR"
+
+log() {
+  echo -e "[$(date +'%F %T')] $1" | tee -a "$LOG_DIR/general.log"
+}
+
 # BLOQUE 1 — Configuración inteligente de DuckDNS
 DUCKDNS_DOMAIN="sumadre"
 DUCKDNS_TOKEN="9947bc93-3b12-427f-8eaf-24d8dbd85b04"
@@ -74,36 +83,38 @@ EOF
   echo "[✅ DuckDNS configurado y activo]"
 fi
 
-echo "[🔧 Instalando dependencias base para virtualización y servicios...]"
-sudo apt update
-sudo apt install -y \
-  qemu-kvm \
-  libvirt-daemon-system \
-  libvirt-daemon \
-  libvirt-daemon-driver-qemu \
-  libvirt-clients \
-  bridge-utils \
-  virtinst \
-  wget curl git \
-  minidlna
+# BLOQUE 2 — Instalación de dependencias base con verificación
 
-echo "[🧩 Activando libvirt...]"
-sudo systemctl enable --now libvirtd
+log "[🔧 Comprobando e instalando dependencias base para virtualización y servicios...]"
 
-# Verificar que el socket de libvirt está disponible
+base_packages=(
+  qemu-kvm libvirt-daemon-system libvirt-daemon libvirt-daemon-driver-qemu
+  libvirt-clients bridge-utils virtinst wget curl git minidlna
+)
+
+missing=()
+for pkg in "${base_packages[@]}"; do
+  dpkg -s "$pkg" &>/dev/null || missing+=("$pkg")
+done
+
+if [ "${#missing[@]}" -eq 0 ]; then
+  log "[⏩ Todos los paquetes base ya están instalados. Saltando.]"
+else
+  log "[📦 Instalando paquetes faltantes: ${missing[*]}]"
+  apt update && apt install -y "${missing[@]}"
+fi
+
+log "[🧩 Activando libvirt...]"
+systemctl enable --now libvirtd
+
 if [ ! -S /var/run/libvirt/libvirt-sock ]; then
   echo "❌ Error: libvirt no está activo o el socket no existe. Abortando..."
   exit 1
 fi
 
-echo "[✅ Entorno de virtualización y DLNA preparados]"
-set -e
-LOG_DIR="/var/log/fitandsetup"
-mkdir -p "$LOG_DIR"
+log "[✅ Entorno de virtualización y DLNA preparados]"
 
-log() {
-  echo -e "[$(date +'%F %T')] $1" | tee -a "$LOG_DIR/general.log"
-}
+# BLOQUE 3 — Montaje de discos SSD /mnt/storage y /mnt/backup con autodetección
 
 is_simulation=false
 if [[ "$1" == "--simular" || "$1" == "--dry-run" ]]; then
@@ -123,138 +134,148 @@ mnt_storage="/mnt/storage"
 mnt_backup="/mnt/backup"
 mkdir -p "$mnt_storage" "$mnt_backup"
 
-get_latest_mount() {
-  mountpoint=$1
-  dev=$2
-  mkdir -p "$mountpoint"
-  mount "/dev/$dev" "$mountpoint" 2>/dev/null || true
-  latest_file=$(find "$mountpoint" -type f -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2)
-  umount "$mountpoint" 2>/dev/null || true
-  echo "$latest_file"
-}
-
-latest1=$(get_latest_mount "/mnt/tmp1" "${ssds[0]}")
-latest2=$(get_latest_mount "/mnt/tmp2" "${ssds[1]}")
-
-if [[ "$latest1" > "$latest2" ]]; then
-  dev_storage="${ssds[0]}"
-  dev_backup="${ssds[1]}"
+# Si ya están montados correctamente, omitir el bloque
+if mountpoint -q "$mnt_storage" && mountpoint -q "$mnt_backup"; then
+  log "[⏩ SSDs ya están montados en $mnt_storage y $mnt_backup. Saltando.]"
 else
-  dev_storage="${ssds[1]}"
-  dev_backup="${ssds[0]}"
+  get_latest_mount() {
+    mountpoint=$1
+    dev=$2
+    mkdir -p "$mountpoint"
+    mount "/dev/$dev" "$mountpoint" 2>/dev/null || true
+    latest_file=$(find "$mountpoint" -type f -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2)
+    umount "$mountpoint" 2>/dev/null || true
+    echo "$latest_file"
+  }
+
+  latest1=$(get_latest_mount "/mnt/tmp1" "${ssds[0]}")
+  latest2=$(get_latest_mount "/mnt/tmp2" "${ssds[1]}")
+
+  if [[ "$latest1" > "$latest2" ]]; then
+    dev_storage="${ssds[0]}"
+    dev_backup="${ssds[1]}"
+  else
+    dev_storage="${ssds[1]}"
+    dev_backup="${ssds[0]}"
+  fi
+
+  log "Asignando /dev/$dev_storage a /mnt/storage"
+  log "Asignando /dev/$dev_backup a /mnt/backup"
+
+  if ! $is_simulation; then
+    part_storage=$(lsblk -ln /dev/$dev_storage | awk 'NR==2 {print $1}')
+    part_backup=$(lsblk -ln /dev/$dev_backup | awk 'NR==2 {print $1}')
+
+    mount "/dev/$part_storage" "$mnt_storage" || log "⚠️ Fallo al montar $part_storage"
+    mount "/dev/$part_backup" "$mnt_backup" || log "⚠️ Fallo al montar $part_backup"
+
+    grep -q "$mnt_storage" /etc/fstab || echo "/dev/$part_storage $mnt_storage ext4 defaults 0 2" >> /etc/fstab
+    grep -q "$mnt_backup" /etc/fstab || echo "/dev/$part_backup $mnt_backup ext4 defaults 0 2" >> /etc/fstab
+  fi
+
+  log "Montaje de discos completado."
 fi
 
-log "Asignando /dev/$dev_storage a /mnt/storage"
-log "Asignando /dev/$dev_backup a /mnt/backup"
-
-if ! $is_simulation; then
-  part_storage=$(lsblk -ln /dev/$dev_storage | awk 'NR==2 {print $1}')
-  part_backup=$(lsblk -ln /dev/$dev_backup | awk 'NR==2 {print $1}')
-
-  mountpoint -q "$mnt_storage" || mount "/dev/$part_storage" "$mnt_storage"
-  mountpoint -q "$mnt_backup" || mount "/dev/$part_backup" "$mnt_backup"
-
-  grep -q "$mnt_storage" /etc/fstab || echo "/dev/$part_storage $mnt_storage ext4 defaults 0 2" >> /etc/fstab
-  grep -q "$mnt_backup" /etc/fstab || echo "/dev/$part_backup $mnt_backup ext4 defaults 0 2" >> /etc/fstab
-fi
-
-log "Montaje de discos completado."
-
-# BLOQUE: Sincronización automática de /mnt/storage a /mnt/backup
+# BLOQUE 4 — Sincronización automática de /mnt/storage a /mnt/backup
 
 log "Configurando sincronización automática de /mnt/storage a /mnt/backup..."
 
 BACKUP_LOG="/var/log/fitandsetup/backup_sync.log"
-mkdir -p /var/log/fitandsetup
+mkdir -p "$(dirname "$BACKUP_LOG")"
 
 # Script de sincronización con exclusiones
-cat <<'EOF' | sudo tee /usr/local/bin/sync_storage_to_backup.sh > /dev/null
+cat <<'EOF' > /usr/local/bin/sync_storage_to_backup.sh
 #!/bin/bash
 SRC="/mnt/storage"
 DST="/mnt/backup"
 LOG="/var/log/fitandsetup/backup_sync.log"
 
 if mountpoint -q "$SRC" && mountpoint -q "$DST"; then
-  echo "[🔄 $(date)] Iniciando sincronización..." >> "$LOG"
-  rsync -aAXHv --delete --exclude="rsnapshot/" "$SRC/" "$DST/" >> "$LOG" 2>&1
-  echo "[✅ $(date)] Sincronización completada." >> "$LOG"
-  echo "Última sincronización correcta: $(date)" > "$DST/.ultima_sync.txt"
+  echo "[🔄 \$(date)] Iniciando sincronización..." >> "\$LOG"
+  rsync -aAXHv --delete --exclude="rsnapshot/" "\$SRC/" "\$DST/" >> "\$LOG" 2>&1
+  echo "[✅ \$(date)] Sincronización completada." >> "\$LOG"
+  echo "Última sincronización correcta: \$(date)" > "\$DST/.ultima_sync.txt"
 else
-  echo "[⚠️ $(date)] Uno de los discos no está montado. Sincronización cancelada." >> "$LOG"
+  echo "[⚠️ \$(date)] Uno de los discos no está montado. Sincronización cancelada." >> "\$LOG"
 fi
 EOF
 
-sudo chmod +x /usr/local/bin/sync_storage_to_backup.sh
+chmod +x /usr/local/bin/sync_storage_to_backup.sh
 
-# Cron para ejecutar cada hora
-echo "0 * * * * root /usr/local/bin/sync_storage_to_backup.sh" | sudo tee /etc/cron.d/storage_backup_sync > /dev/null
+# Crear cron si no existe
+cron_file="/etc/cron.d/storage_backup_sync"
+if ! grep -q "sync_storage_to_backup.sh" "$cron_file" 2>/dev/null; then
+  echo "0 * * * * root /usr/local/bin/sync_storage_to_backup.sh" > "$cron_file"
+fi
 
 log "Sincronización activa cada hora y ejecutable manualmente con:"
 log "sudo /usr/local/bin/sync_storage_to_backup.sh"
 
-# BLOQUE: Creación limpia de la VM de Home Assistant con log
-log "Preparando VM limpia para Home Assistant..."
+# BLOQUE 5 — Creación limpia de la VM Home Assistant con log
 
-HA_VM_NAME="home-assistant"
-HA_IMAGE="/mnt/homeassistant/haos.qcow2"
-HA_IMG_URL="https://github.com/home-assistant/operating-system/releases/latest/download/haos_ova-ova.qcow2.xz"
-HA_IMG_TMP="/tmp/haos.qcow2.xz"
-HA_LOG="/var/log/fitandsetup/ha_vm.log"
+log "[🏠 Instalando Home Assistant en máquina virtual limpia]"
 
-mkdir -p /var/log/fitandsetup
+haos_img_url="https://github.com/home-assistant/operating-system/releases/download/10.5/haos_ova-10.5.qcow2.xz"
+haos_img_local="/tmp/haos.qcow2.xz"
+haos_dir="/mnt/storage/haos_vm"
+haos_disk="$haos_dir/haos.qcow2"
+ha_log="/var/log/fitandsetup/ha_vm.log"
 
-{
-echo "[🔄 $(date)] Iniciando recreación de VM $HA_VM_NAME..."
-
-if virsh list --all | grep -q "$HA_VM_NAME"; then
-  echo "[🛑] Deteniendo y eliminando VM anterior..."
-  virsh destroy "$HA_VM_NAME" 2>/dev/null
-  virsh undefine "$HA_VM_NAME" --remove-all-storage
-fi
-
-if [ -f "$HA_IMAGE" ]; then
-  echo "[🧹] Eliminando imagen anterior: $HA_IMAGE"
-  rm -f "$HA_IMAGE"
-fi
-
-echo "[⬇️] Descargando nueva imagen de Home Assistant..."
-wget -O "$HA_IMG_TMP" "$HA_IMG_URL"
-
-echo "[📦] Descomprimiendo imagen..."
-unxz "$HA_IMG_TMP"
-mv "${HA_IMG_TMP%.xz}" "$HA_IMAGE"
-
-echo "[🖥️] Creando nueva VM..."
-virt-install \
-  --name "$HA_VM_NAME" \
-  --memory 2048 \
-  --vcpus 2 \
-  --import \
-  --disk path="$HA_IMAGE",format=qcow2 \
-  --network network=default \
-  --os-type=linux \
-  --os-variant=generic \
-  --noautoconsole
-
-echo "[✅ $(date)] VM creada correctamente."
-
-} 2>&1 | tee -a "$HA_LOG"
-# BLOQUE 4: Configuración de Time Machine vía Samba
-log "Instalando Samba y configurando soporte para Time Machine..."
+mkdir -p "$haos_dir" "$(dirname "$ha_log")"
 
 if ! $is_simulation; then
-  apt update && apt install -y samba
+  # Eliminar VM anterior si existe
+  if virsh list --all | grep -q "home-assistant"; then
+    log "[🧹 Eliminando VM anterior 'home-assistant']"
+    virsh destroy home-assistant 2>/dev/null || true
+    virsh undefine home-assistant --remove-all-storage 2>/dev/null || true
+  fi
+
+  # Eliminar disco previo
+  [ -f "$haos_disk" ] && rm -f "$haos_disk"
+
+  # Descargar e instalar nueva imagen
+  log "[⬇️ Descargando imagen de Home Assistant OS...]"
+  curl -L "$haos_img_url" -o "$haos_img_local"
+  unxz "$haos_img_local"
+  mv /tmp/haos.qcow2 "$haos_disk"
+
+  log "[🚀 Creando nueva VM Home Assistant]"
+  virt-install --name home-assistant \
+    --memory 2048 --vcpus 2 \
+    --disk path="$haos_disk",format=qcow2 \
+    --os-variant generic \
+    --import --network bridge=br0 \
+    --noautoconsole \
+    &> "$ha_log"
+
+  log "[✅ Home Assistant instalado y ejecutándose como VM. Log: $ha_log]"
+else
+  log "[🔎 Simulación: se saltó la instalación de Home Assistant VM]"
 fi
 
-smb_conf="/etc/samba/smb.conf"
+# BLOQUE 6 — Configuración de Time Machine vía Samba con autodetección
+
+log "Configurando soporte para Time Machine..."
+
 backup_share="[TimeMachine]"
 backup_path="$mnt_storage/timemachine"
+smb_conf="/etc/samba/smb.conf"
+samba_needs_restart=false
 
-# NO crear carpeta si ya existe
+# Instalar samba si no está
+if ! dpkg -s samba &>/dev/null; then
+  log "[📦 Instalando Samba...]"
+  apt update && apt install -y samba
+  samba_needs_restart=true
+fi
+
+# Crear carpeta de respaldo si no existe
 if [[ ! -d "$backup_path" ]]; then
   mkdir -p "$backup_path"
 fi
 
+# Añadir bloque a smb.conf si no existe
 if ! grep -q "$backup_share" "$smb_conf"; then
   cat <<EOL >> "$smb_conf"
 
@@ -267,89 +288,96 @@ $backup_share
    fruit:time machine = yes
    spotlight = no
 EOL
+  samba_needs_restart=true
 fi
 
-if ! $is_simulation; then
+# Reiniciar Samba solo si hubo cambios
+if $samba_needs_restart; then
+  log "[🔄 Reiniciando Samba...]"
   systemctl restart smbd
 fi
 
-log "Time Machine compartido como 'andrei-ubuntu.local' y activo."
+log "Time Machine compartido como '$(hostname).local' y activo."
 
-# BLOQUE 5: Snapshots automáticos y limpieza inteligente
-# BLOQUE 5: Snapshots automáticos y limpieza inteligente (con rsnapshot)
+# BLOQUE 7 — Snapshots automáticos con rsnapshot (con autodetección)
+
 log "Configurando rsnapshot para backups del sistema..."
 
-if ! $is_simulation; then
-  echo "[📦 Instalando rsnapshot para backups en ext4...]"
-  sudo apt install -y rsnapshot
+SNAPSHOT_ROOT="/mnt/storage/rsnapshot"
+SOURCE="/"
+RS_CONF="/etc/rsnapshot.conf"
+RS_CLEANUP="/usr/local/bin/rsnapshot_cleanup_if_low_space.sh"
+RS_LOG="/var/log/fitandsetup/rsnapshot_cleanup.log"
 
-  echo "[🛠️ Configurando rsnapshot...]"
+if ! dpkg -s rsnapshot &>/dev/null; then
+  log "[📦 Instalando rsnapshot...]"
+  apt install -y rsnapshot
+fi
 
-  SNAPSHOT_ROOT="/mnt/storage/rsnapshot"
-  SOURCE="/"
+# Hacer copia si aún no se ha modificado antes
+if ! grep -q "$SNAPSHOT_ROOT" "$RS_CONF"; then
+  log "[🛠️ Configurando rsnapshot por primera vez...]"
 
-  # Copia archivo base
-  sudo cp /etc/rsnapshot.conf /etc/rsnapshot.conf.bak
+  cp "$RS_CONF" "${RS_CONF}.bak"
 
-  # Modifica configuración principal
-  sudo sed -i "s|^snapshot_root.*|snapshot_root   $SNAPSHOT_ROOT/|" /etc/rsnapshot.conf
-  sudo sed -i 's/^#cmd_cp/cmd_cp/' /etc/rsnapshot.conf
-  sudo sed -i 's/^#cmd_rm/cmd_rm/' /etc/rsnapshot.conf
-  sudo sed -i 's/^#cmd_rsync/cmd_rsync/' /etc/rsnapshot.conf
+  sed -i "s|^snapshot_root.*|snapshot_root   $SNAPSHOT_ROOT/|" "$RS_CONF"
+  sed -i 's/^#cmd_cp/cmd_cp/' "$RS_CONF"
+  sed -i 's/^#cmd_rm/cmd_rm/' "$RS_CONF"
+  sed -i 's/^#cmd_rsync/cmd_rsync/' "$RS_CONF"
 
-  # Define intervalos personalizados
-  sudo sed -i '/^interval /d' /etc/rsnapshot.conf
-  echo -e "interval\t6h\t7" | sudo tee -a /etc/rsnapshot.conf
-  echo -e "interval\t12h\t7" | sudo tee -a /etc/rsnapshot.conf
-  echo -e "interval\tdaily\t7" | sudo tee -a /etc/rsnapshot.conf
-  echo -e "interval\t72h\t4" | sudo tee -a /etc/rsnapshot.conf
+  sed -i '/^interval /d' "$RS_CONF"
+  echo -e "interval\t6h\t7" >> "$RS_CONF"
+  echo -e "interval\t12h\t7" >> "$RS_CONF"
+  echo -e "interval\tdaily\t7" >> "$RS_CONF"
+  echo -e "interval\t72h\t4" >> "$RS_CONF"
 
-  # Añade fuente a respaldar
-  if ! grep -q -E "backup\s+/\s+" /etc/rsnapshot.conf; then
-    echo -e "backup\t$SOURCE\tlocalhost/" | sudo tee -a /etc/rsnapshot.conf
+  if ! grep -q -E "backup\s+/\s+" "$RS_CONF"; then
+    echo -e "backup\t$SOURCE\tlocalhost/" >> "$RS_CONF"
   fi
 
-  sudo mkdir -p "$SNAPSHOT_ROOT"
+  mkdir -p "$SNAPSHOT_ROOT"
 
-  # Verifica configuración
   rsnapshot configtest || {
     echo "❌ Error en configuración de rsnapshot"
     exit 1
   }
+else
+  log "[⏩ Configuración de rsnapshot ya aplicada. Saltando.]"
+fi
 
-  echo "[⏱️ Añadiendo tareas programadas...]"
-  (
-    sudo crontab -l 2>/dev/null
-    echo "0 */6 * * * /usr/bin/rsnapshot 6h"
-    echo "0 */12 * * * /usr/bin/rsnapshot 12h"
-    echo "0 3 * * * /usr/bin/rsnapshot daily"
-    echo "0 */72 * * * /usr/bin/rsnapshot 72h"
-  ) | sudo crontab -
+# Añadir cronjobs si no existen
+if ! crontab -l 2>/dev/null | grep -q "rsnapshot"; then
+  log "[⏱️ Añadiendo tareas programadas para snapshots...]"
+  (crontab -l 2>/dev/null; echo "0 */6 * * * /usr/bin/rsnapshot 6h"; echo "0 */12 * * * /usr/bin/rsnapshot 12h"; echo "0 3 * * * /usr/bin/rsnapshot daily"; echo "0 */72 * * * /usr/bin/rsnapshot 72h") | crontab -
+else
+  log "[⏩ Cronjobs para rsnapshot ya existen. Saltando.]"
+fi
 
-  # Limpieza automática si se llena
-  echo "[🧹 Configurando limpieza automática de snapshots si hay poco espacio...]"
+# Crear script de limpieza si no existe
+if [ ! -f "$RS_CLEANUP" ]; then
+  log "[🧹 Creando limpieza automática si hay poco espacio...]"
 
-  cat <<'CLEAN' | sudo tee /usr/local/bin/rsnapshot_cleanup_if_low_space.sh > /dev/null
+  cat <<CLEAN | tee "$RS_CLEANUP" > /dev/null
 #!/bin/bash
-LOG="/var/log/fitandsetup/rsnapshot_cleanup.log"
-SNAPSHOT_ROOT="/mnt/storage/rsnapshot"
-usage=$(df "$SNAPSHOT_ROOT" | awk 'NR==2 {print $5}' | sed 's/%//')
+LOG="$RS_LOG"
+SNAPSHOT_ROOT="$SNAPSHOT_ROOT"
+usage=\$(df "\$SNAPSHOT_ROOT" | awk 'NR==2 {print \$5}' | sed 's/%//')
 
 if (( usage > 80 )); then
-    echo "[$(date)] Espacio en $SNAPSHOT_ROOT es $usage%. Limpiando snapshots antiguos..." >> "$LOG"
+    echo "[\$(date)] Espacio en \$SNAPSHOT_ROOT es \$usage%. Limpiando snapshots antiguos..." >> "\$LOG"
     for interval in 6h 12h daily 72h; do
-        oldest=$(ls -1dt "$SNAPSHOT_ROOT"/$interval.* 2>/dev/null | tail -n 1)
-        if [ -d "$oldest" ]; then
-            rm -rf "$oldest"
-            echo "[$(date)] Eliminado: $oldest" >> "$LOG"
+        oldest=\$(ls -1dt "\$SNAPSHOT_ROOT"/\$interval.* 2>/dev/null | tail -n 1)
+        if [ -d "\$oldest" ]; then
+            rm -rf "\$oldest"
+            echo "[\$(date)] Eliminado: \$oldest" >> "\$LOG"
         fi
     done
-    touch "$SNAPSHOT_ROOT/rsnapshot_cleanup_alert.txt"
+    touch "\$SNAPSHOT_ROOT/rsnapshot_cleanup_alert.txt"
 fi
 CLEAN
 
-  sudo chmod +x /usr/local/bin/rsnapshot_cleanup_if_low_space.sh
-  echo "0 */4 * * * root /usr/local/bin/rsnapshot_cleanup_if_low_space.sh" | sudo tee /etc/cron.d/rsnapshot_cleanup > /dev/null
+  chmod +x "$RS_CLEANUP"
+  echo "0 */4 * * * root $RS_CLEANUP" | tee /etc/cron.d/rsnapshot_cleanup > /dev/null
 fi
 
 log "rsnapshot configurado con backups automáticos y limpieza inteligente."
