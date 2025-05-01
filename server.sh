@@ -8,87 +8,86 @@ mkdir -p "$LOG_DIR"
 log() {
   echo -e "[$(date +'%F %T')] $1" | tee -a "$LOG_DIR/general.log"
 }
+# BLOQUE — Instalación y configuración de Jellyfin como DLNA
 
-# BLOQUE 0 — Autodescarga y relanzamiento desde copia local
-if [[ "$1" != "--skip-download" ]]; then
-  SCRIPT_PATH="/usr/local/bin/fitandsetup.sh"
+log "[🎞️ Instalando y configurando Jellyfin como servidor DLNA local...]"
 
-  echo "[🧩 Descargando copia local del script para futuras ejecuciones...]"
-  curl -fsSL https://raw.githubusercontent.com/andreicnx/server/main/server.sh -o "$SCRIPT_PATH"
-  chmod +x "$SCRIPT_PATH"
+JELLYFIN_LOG="/var/log/fitandsetup/jellyfin.log"
+JELLYFIN_API_FILE="/etc/jellyfin_api.key"
+REFRESH_SCRIPT="/usr/local/bin/jellyfin_refresh.sh"
 
-  echo "[⏩ Ejecutando desde copia local. Este bloque ya no se volverá a ejecutar.]"
-  exec sudo bash "$SCRIPT_PATH" --skip-download
-  exit 0
-fi
-
-
-# 3. Instalar Jellyfin automáticamente sin confirmación
+# Instalar Jellyfin si no está
 if ! dpkg -s jellyfin &>/dev/null; then
-  curl -fsSL https://repo.jellyfin.org/install-debuntu.sh | bash /dev/stdin -y
+  apt install -y gnupg lsb-release curl apt-transport-https
+
+  mkdir -p /etc/apt/keyrings
+  curl -fsSL https://repo.jellyfin.org/jellyfin_team.gpg.key | gpg --dearmor -o /etc/apt/keyrings/jellyfin.gpg
+  echo "deb [signed-by=/etc/apt/keyrings/jellyfin.gpg arch=$( dpkg --print-architecture )] https://repo.jellyfin.org/ubuntu $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/jellyfin.list
+
+  apt update
+  apt install -y jellyfin
 fi
 
-# 4. Detectar IP real del servidor
-SERVER_IP=$(ip -4 addr show br0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
-[[ -z "$SERVER_IP" ]] && SERVER_IP=$(hostname -I | awk '{print $1}')
-JELLYFIN_URL="http://$SERVER_IP:8096"
+# Esperar a que arranque y obtener IP local real
+systemctl enable jellyfin
+systemctl start jellyfin
+sleep 15
+IP_LOCAL=$(ip route get 1 | awk '{print $7; exit}')
+log "[✅ Jellyfin instalado y activo en http://$IP_LOCAL:8096]"
 
-log "[✅ Jellyfin instalado y activo en $JELLYFIN_URL]"
-
-# 5. Esperar a que arranque el servicio
-sleep 10
-
-# 6. Detectar si API ya está configurada
-API_KEY_FILE="/etc/jellyfin/fitandapi.key"
-API_KEY=""
-if [[ -f "$API_KEY_FILE" ]]; then
-  API_KEY=$(<"$API_KEY_FILE")
+# Añadir carpeta como biblioteca si config.json está listo
+CONFIG_FILE="/var/lib/jellyfin/config/system.xml"
+if [[ -f "$CONFIG_FILE" ]]; then
+  log "[📁 Añadiendo carpeta '/mnt/storage/X' a la biblioteca de Jellyfin...]"
+  mkdir -p /mnt/storage/X
+  # Aún no hay método fiable de insertar librerías vía línea de comandos.
+  # Se espera que el usuario termine configuración inicial desde la web.
+else
+  log "[📁 Añade manualmente la carpeta '/mnt/storage/X' como biblioteca desde la interfaz web si es la primera vez.]"
 fi
 
-# 7. Si no hay API, preguntar
-if [[ -z "$API_KEY" ]]; then
-  echo
+# Obtener API Key si no está guardada
+if [[ ! -f "$JELLYFIN_API_FILE" ]]; then
+  echo ""
   echo "🔑 Para habilitar el refresco automático, necesitas crear una API Key en:"
-  echo "→ $JELLYFIN_URL"
+  echo "→ http://$IP_LOCAL:8096"
   echo "Finaliza la configuración inicial, luego ve a: Panel de control → API Keys → Nueva clave"
-  echo
-  read -p "¿Quieres introducir la API Key ahora? (s/n): " want_key
-  if [[ "$want_key" == "s" ]]; then
-    read -p "Introduce la API Key de Jellyfin: " API_KEY
-    echo "$API_KEY" > "$API_KEY_FILE"
-    chmod 600 "$API_KEY_FILE"
-    log "[✅ API Key guardada.]"
+  echo ""
+
+  read -r -p "¿Quieres introducir la API Key ahora? (s/n): " RESPUESTA </dev/tty
+  if [[ "$RESPUESTA" == "s" ]]; then
+    read -r -p "Introduce la API Key de Jellyfin: " JELLYFIN_API_KEY </dev/tty
+    echo "$JELLYFIN_API_KEY" > "$JELLYFIN_API_FILE"
+    chmod 600 "$JELLYFIN_API_FILE"
+    log "[✅ API Key guardada en $JELLYFIN_API_FILE]"
   else
     log "[⏩ Saltando refresco automático de biblioteca por ahora.]"
-    exit 0
+    return 0 2>/dev/null || exit 0
   fi
 fi
 
-# 8. Añadir biblioteca automáticamente si no existe
-JELLYFIN_LIBRARIES=$(curl -s -H "X-Emby-Token: $API_KEY" "$JELLYFIN_URL/Library/VirtualFolders")
-if ! echo "$JELLYFIN_LIBRARIES" | grep -q "/mnt/storage/X"; then
-  curl -s -X POST "$JELLYFIN_URL/Library/VirtualFolders" \
-    -H "X-Emby-Token: $API_KEY" \
-    -H "Content-Type: application/json" \
-    -d '{"Name":"Videos","Locations":["/mnt/storage/X"]}' >/dev/null
-  log "[✅ Biblioteca '/mnt/storage/X' añadida a Jellyfin.]"
-else
-  log "[⏩ Biblioteca ya existe. Saltando.]"
+# Crear script de refresco si no existe
+if [[ ! -f "$REFRESH_SCRIPT" ]]; then
+  log "[🛠️ Creando script de refresco automático de la biblioteca Jellyfin...]"
+  cat <<EOF > "$REFRESH_SCRIPT"
+#!/bin/bash
+API_KEY=\$(cat "$JELLYFIN_API_FILE")
+HOST="http://127.0.0.1:8096"
+
+if ! systemctl is-active --quiet jellyfin; then
+  echo "[\$(date)] Jellyfin no estaba activo. Iniciando..." >> "$JELLYFIN_LOG"
+  systemctl start jellyfin
+  sleep 10
 fi
 
-# 9. Crear script de refresco automático
-REFRESH_SCRIPT="/usr/local/bin/jellyfin_refresh.sh"
-cat <<EOF > "$REFRESH_SCRIPT"
-#!/bin/bash
-API_KEY="$API_KEY"
-HOST="$JELLYFIN_URL"
-curl -s -X POST "\$HOST/Library/Refresh" -H "X-Emby-Token: \$API_KEY"
+curl -s -X POST "\$HOST/Library/Refresh" -H "X-Emby-Token: \$API_KEY" >> "$JELLYFIN_LOG"
 EOF
 
-chmod +x "$REFRESH_SCRIPT"
+  chmod +x "$REFRESH_SCRIPT"
+fi
 
-# 10. Añadir a cron si no existe
+# Añadir cron si no existe
 if ! grep -q jellyfin_refresh /etc/crontab; then
-  echo "*/15 * * * * root $REFRESH_SCRIPT" >> /etc/crontab
-  log "[✅ Refresco automático programado cada 15 minutos.]"
+  echo "*/15 * * * * root $REFRESH_SCRIPT # jellyfin_refresh" >> /etc/crontab
+  log "[⏱️ Tarea programada: refresco automático de biblioteca cada 15 min.]"
 fi
