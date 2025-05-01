@@ -469,6 +469,68 @@ else
   log "[🔎 Simulación: se omitió configuración real de WireGuard.]"
 fi
 
+# BLOQUE 9 — Backup automático de Home Assistant
+
+log "[📦 Configurando backups automáticos de Home Assistant...]"
+
+BACKUP_DIR="/mnt/storage/homeassistant_backups"
+VM_NAME="home-assistant"
+MAX_BACKUPS=5
+CRON_JOB="/etc/cron.d/ha_vm_backup"
+
+# Comprobación si ya existe
+if [[ -f "$CRON_JOB" && -d "$BACKUP_DIR" ]]; then
+  log "[⏩ Backup de Home Assistant ya configurado. Saltando.]"
+else
+  if ! $is_simulation; then
+    mkdir -p "$BACKUP_DIR"
+
+    # Script de backup
+    cat <<'EOSCRIPT' > /usr/local/bin/ha_vm_backup.sh
+#!/bin/bash
+set -e
+
+VM_NAME="home-assistant"
+BACKUP_DIR="/mnt/storage/homeassistant_backups"
+TMP_DIR="/tmp/ha_backup"
+MAX_BACKUPS=5
+
+timestamp=$(date +"%Y%m%d-%H%M%S")
+backup_name="backup_${timestamp}.tar"
+vm_disk="/mnt/storage/haos_vm/haos.qcow2"
+
+# Apagar VM temporalmente
+virsh domstate "$VM_NAME" | grep -q running && virsh shutdown "$VM_NAME" && sleep 10
+
+# Extraer backup desde la partición de datos de HAOS
+mkdir -p "$TMP_DIR"
+virt-copy-out -a "$vm_disk" /data/backup "$TMP_DIR"
+
+# Renombrar y mover al directorio final
+if [[ -d "$TMP_DIR/backup" ]]; then
+  tar -cf "$BACKUP_DIR/$backup_name" -C "$TMP_DIR/backup" .
+  echo "[$(date)] Backup creado: $backup_name" >> /var/log/fitandsetup/ha_vm_backup.log
+fi
+
+# Limpiar backups antiguos
+cd "$BACKUP_DIR"
+ls -1tr backup_*.tar | head -n -$MAX_BACKUPS | xargs -r rm -f
+
+# Encender de nuevo la VM si estaba encendida
+virsh start "$VM_NAME" &>/dev/null || true
+
+rm -rf "$TMP_DIR"
+EOSCRIPT
+
+    chmod +x /usr/local/bin/ha_vm_backup.sh
+
+    # Cron diario a las 3:00
+    echo "0 3 * * * root /usr/local/bin/ha_vm_backup.sh" > "$CRON_JOB"
+
+    log "[✅ Backup de Home Assistant configurado. Se realizará cada noche a las 03:00.]"
+  fi
+fi
+
 # BLOQUE FINAL — Comprobación visual del sistema tras la instalación
 
 log "[🔍 Comprobación final del sistema...]"
