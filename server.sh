@@ -10,28 +10,6 @@ log() {
 }
 
 
-# BLOQUE 2 — Instalación de dependencias base con verificación
-
-log "[🔧 Comprobando e instalando dependencias base para virtualización y servicios...]"
-
-base_packages=(
-  qemu-kvm libvirt-daemon-system libvirt-daemon libvirt-daemon-driver-qemu
-  libvirt-clients bridge-utils virtinst wget curl git minidlna
-)
-
-missing=()
-for pkg in "${base_packages[@]}"; do
-  dpkg -s "$pkg" &>/dev/null || missing+=("$pkg")
-done
-
-if [ "${#missing[@]}" -eq 0 ]; then
-  log "[⏩ Todos los paquetes base ya están instalados. Saltando.]"
-else
-  log "[📦 Instalando paquetes faltantes: ${missing[*]}]"
-  apt update && apt install -y "${missing[@]}"
-fi
-
-
 # BLOQUE 12 — nstalación y configuración de Jellyfin + DLNA local + Refresco automático
 
 log "[🎞️ Instalando y configurando Jellyfin como servidor DLNA local...]"
