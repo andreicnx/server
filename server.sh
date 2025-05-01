@@ -675,34 +675,44 @@ EOF
   log "[✅ Script de verificación creado y programado cada 6h.]"
 fi
 
-# BLOQUE 11 — Servidor DLNA (MiniDLNA) configurado para /mnt/storage/X sin scraping
+# BLOQUE 11 — Servidor DLNA con MiniDLNA (ReadyMedia)
 
-log "[📺 Instalando y configurando servidor DLNA (MiniDLNA)...]"
+log "[📺 Instalando y configurando MiniDLNA...]"
 
-DLNA_DIR="/mnt/storage/X"
-CONF_FILE="/etc/minidlna.conf"
-SERVICE_FILE="minidlna"
+MINIDLNA_CONF="/etc/minidlna.conf"
+MINIDLNA_LOG="/var/log/fitandsetup/minidlna.log"
+SHARE_PATH="/mnt/storage/X"
 
-# Instalar MiniDLNA si no está
+# Instalar minidlna si no está
 if ! dpkg -s minidlna &>/dev/null; then
   apt update && apt install -y minidlna
 fi
 
-# Crear directorio si no existe
-mkdir -p "$DLNA_DIR"
+# Configurar minidlna
+if ! grep -q "$SHARE_PATH" "$MINIDLNA_CONF"; then
+  log "[🛠️ Aplicando configuración en $MINIDLNA_CONF...]"
 
-# Configurar minidlna.conf
-sed -i "s|^media_dir=.*|media_dir=V,$DLNA_DIR|" "$CONF_FILE"
-sed -i "s|^#friendly_name=.*|friendly_name=Servidor DLNA Local|" "$CONF_FILE"
-sed -i "s|^#inotify=.*|inotify=yes|" "$CONF_FILE"
-sed -i "s|^#notify_interval=.*|notify_interval=30|" "$CONF_FILE"
-sed -i "s|^#root_container=.*|root_container=V|" "$CONF_FILE"
+  sed -i "s|^media_dir=.*||g" "$MINIDLNA_CONF"
+  echo "media_dir=V,$SHARE_PATH" >> "$MINIDLNA_CONF"
+  sed -i "s|^#\?inotify=.*|inotify=yes|" "$MINIDLNA_CONF"
+  sed -i "s|^#\?friendly_name=.*|friendly_name=ServidorDLNA|" "$MINIDLNA_CONF"
+  sed -i "s|^#\?log_dir=.*|log_dir=/var/log/minidlna|" "$MINIDLNA_CONF"
+fi
 
-# Reiniciar servicio
-systemctl enable "$SERVICE_FILE"
-systemctl restart "$SERVICE_FILE"
+# Crear log si no existe
+mkdir -p /var/log/fitandsetup
+mkdir -p /var/log/minidlna
 
-log "[✅ DLNA activo. Accede desde Chromecast, TV o apps compatibles en la red local.]"
+# Reiniciar el servicio y forzar escaneo
+systemctl restart minidlna
+minidlnad -R
+
+# Comprobar estado
+if systemctl is-active --quiet minidlna; then
+  log "[✅ MiniDLNA activo y compartiendo $SHARE_PATH]"
+else
+  log "[⚠️ MiniDLNA no se inició correctamente. Revisa $MINIDLNA_LOG]"
+fi
 
 # BLOQUE 12 — Servidor DLNA local con Jellyfin
 log "[🎞️ Instalando y configurando Jellyfin como servidor DLNA local...]"
