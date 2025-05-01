@@ -211,6 +211,8 @@ fi
 log "Sincronización activa cada hora y ejecutable manualmente con:"
 log "sudo /usr/local/bin/sync_storage_to_backup.sh"
 
+# BLOQUE 4.5 Configuración segura del bridge de red br0.
+
 echo -e "\n==> BLOQUE 4.5 — Configuración segura del bridge de red br0..."
 BRIDGE_LOG="/var/log/fitandsetup/bridge.log"
 mkdir -p "$(dirname "$BRIDGE_LOG")"
@@ -259,48 +261,16 @@ EOF
     fi
 fi
 
-# BLOQUE X — Configuración segura del bridge br0 con rollback si falla
-echo "===> [Networking] Configurando bridge br0 con rollback si no levanta correctamente..."
+# BLOQUE 4.6— Detección automática de br0 como interfaz para la VM de Home Assistant
+echo -e "\n==> BLOQUE 4.6 — Selección automática de interfaz de red para la VM..."
 
-# Backup actual de Netplan
-cp /etc/netplan/01-netcfg.yaml /etc/netplan/01-netcfg.yaml.bak
-
-# Crear configuración de bridge br0
-cat <<EOF > /etc/netplan/01-netcfg.yaml
-network:
-  version: 2
-  renderer: networkd
-  ethernets:
-    eno1:
-      dhcp4: no
-  bridges:
-    br0:
-      interfaces: [eno1]
-      dhcp4: yes
-      parameters:
-        stp: false
-        forward-delay: 0
-EOF
-
-# Aplicar la configuración
-netplan apply
-
-# Esperar hasta 10s a que el bridge esté operativo
-echo "Esperando a que br0 levante..."
-for i in {1..10}; do
-    if [[ "$(cat /sys/class/net/br0/operstate 2>/dev/null)" == "up" ]]; then
-        echo "✅ br0 está operativo."
-        break
-    fi
-    sleep 1
-done
-
-# Si no se levantó, restaurar backup y reaplicar
-if [[ "$(cat /sys/class/net/br0/operstate 2>/dev/null)" != "up" ]]; then
-    echo "⚠️ br0 NO se levantó. Restaurando configuración anterior..."
-    cp /etc/netplan/01-netcfg.yaml.bak /etc/netplan/01-netcfg.yaml
-    netplan apply
-    echo "✅ Configuración restaurada. La red debería seguir funcionando como antes."
+VM_NET_IFACE="br0"
+if ! ip link show br0 &>/dev/null; then
+    echo "[⚠️] El bridge br0 no está disponible. Usando interfaz física predeterminada."
+    VM_NET_IFACE=$(ip route | grep default | awk '{print $5}')
+    echo "[ℹ️] Usando interfaz $VM_NET_IFACE para la VM."
+else
+    echo "[✅] Bridge br0 detectado. Será usado como interfaz de red para la VM."
 fi
 
 # BLOQUE 5 — Creación limpia de la VM Home Assistant con log
