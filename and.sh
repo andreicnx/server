@@ -1,3 +1,15 @@
+#!/bin/bash
+
+# BLOQUE 0
+set -e
+LOG_DIR="/var/log/fitandsetup"
+mkdir -p "$LOG_DIR"
+
+log() {
+  echo -e "[$(date +'%F %T')] $1" | tee -a "$LOG_DIR/general.log"
+}
+
+
 # BLOQUE 5 — Instalación limpia de Home Assistant en disco dedicado
 log "[🔁 Reinstalando Home Assistant desde cero en disco exclusivo...]"
 
