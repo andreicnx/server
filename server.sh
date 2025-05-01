@@ -277,32 +277,31 @@ fi
 log "[🔁 Reinstalando la máquina virtual de Home Assistant...]"
 
 HA_LOG="/var/log/fitandsetup/ha_vm.log"
-HA_DISK="/mnt/storage/haos_vm/haos.qcow2"
+HA_DIR="/mnt/storage/haos_vm"
+HA_DISK="$HA_DIR/haos.qcow2"
 HA_VM="home-assistant"
 
+# Eliminar VM y disco si existen
 if virsh list --all | grep -q "$HA_VM"; then
   log "[🧨 Eliminando VM existente y su disco...]"
   virsh destroy "$HA_VM" &>/dev/null || true
   virsh undefine "$HA_VM" --nvram &>/dev/null || true
-  rm -f "$HA_DISK"
 fi
 
-mkdir -p "$(dirname "$HA_DISK")"
+mkdir -p "$HA_DIR"
+rm -f "$HA_DISK"
 
 log "[⬇️ Buscando la última imagen de HAOS en formato .qcow2.xz...]"
-LATEST_URL=$(curl -s https://api.github.com/repos/home-assistant/operating-system/releases/latest \
-  | grep "browser_download_url" | grep "haos_ova.*qcow2.xz" | cut -d '"' -f 4)
+HA_URL=$(curl -s https://api.github.com/repos/home-assistant/operating-system/releases/latest \
+  | grep "haos_ova-.*\.qcow2\.xz" \
+  | grep "browser_download_url" \
+  | cut -d '"' -f 4)
 
-if [[ -z "$LATEST_URL" ]]; then
-  log "[❌ No se pudo obtener la URL de descarga. Abortando bloque 5.]"
-  exit 1
-fi
-
-log "[⬇️ Descargando imagen desde: $LATEST_URL]"
-curl -L -o "$HA_DISK.xz" "$LATEST_URL"
+log "[⬇️ Descargando imagen desde: $HA_URL]"
+curl -L -o "$HA_DISK.xz" "$HA_URL"
 
 log "[📦 Descomprimiendo imagen...]"
-xz -d "$HA_DISK.xz"
+xz -df "$HA_DISK.xz"
 
 log "[⚙️ Creando VM con libvirt...]"
 virt-install \
