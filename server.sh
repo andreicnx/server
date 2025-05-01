@@ -273,51 +273,44 @@ else
     echo "[✅] Bridge br0 detectado. Será usado como interfaz de red para la VM."
 fi
 
-# BLOQUE 5 — Creación limpia de la VM Home Assistant con log
-echo -e "\n==> BLOQUE 5 — Creación limpia de la VM Home Assistant con log..."
+# BLOQUE 5 — Creación limpia de la VM Home Assistant con log aislado
+log "[🔁 Reinstalando la máquina virtual de Home Assistant...]"
 
 HA_LOG="/var/log/fitandsetup/ha_vm.log"
-mkdir -p "$(dirname "$HA_LOG")"
+HA_DISK="/mnt/storage/haos_vm/haos.qcow2"
+HA_VM="home-assistant"
 
-log_ha() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$HA_LOG"
-}
+if virsh list --all | grep -q "$HA_VM"; then
+  log "[🧨 Eliminando VM existente y su disco...]"
 
-log_ha "🧹 Borrando máquina virtual anterior (si existe)..."
-virsh destroy homeassistant &>/dev/null
-virsh undefine homeassistant --nvram &>/dev/null
-rm -f /mnt/storage/homeassistant/homeassistant.qcow2
-
-log_ha "🧩 Creando nuevo disco para Home Assistant..."
-qemu-img create -f qcow2 /mnt/storage/homeassistant/homeassistant.qcow2 32G
-
-log_ha "🔍 Detectando interfaz de red disponible..."
-VM_NET_IFACE="br0"
-if ! ip link show br0 &>/dev/null; then
-    VM_NET_IFACE=$(ip route | grep default | awk '{print $5}')
-    log_ha "⚠️ Bridge br0 no encontrado. Usando interfaz $VM_NET_IFACE en su lugar."
-else
-    log_ha "✅ Bridge br0 detectado y seleccionado."
+  virsh destroy "$HA_VM" &>/dev/null || true
+  virsh undefine "$HA_VM" --nvram &>/dev/null || true
+  rm -f "$HA_DISK"
 fi
 
-log_ha "🚀 Creando máquina virtual..."
+mkdir -p "$(dirname "$HA_DISK")"
+log "[⬇️ Descargando imagen de HAOS...]"
+curl -s -L -o "$HA_DISK" "https://github.com/home-assistant/operating-system/releases/latest/download/haos_ova-11.1.qcow2.xz"
+
+log "[📦 Descomprimiendo imagen...]"
+xz -d "$HA_DISK.xz"
+
+log "[⚙️ Creando VM con libvirt...]"
 virt-install \
-  --name homeassistant \
-  --memory 4096 \
+  --name "$HA_VM" \
+  --memory 2048 \
   --vcpus 2 \
-  --cpu host \
-  --disk path=/mnt/storage/homeassistant/homeassistant.qcow2,format=qcow2,bus=virtio \
-  --os-type linux \
-  --os-variant ubuntu20.04 \
+  --disk path="$HA_DISK",format=qcow2 \
   --import \
-  --network bridge=$VM_NET_IFACE \
-  --graphics none \
+  --os-variant generic \
+  --network bridge=br0 \
   --noautoconsole \
-  --boot hd \
-  --log $HA_LOG
+  --quiet >> "$HA_LOG" 2>&1 &
 
-log_ha "✅ Máquina virtual Home Assistant creada correctamente."
 
+log "[⏳ VM de Home Assistant en proceso de creación en segundo plano...]"
+
+# BLOQUE 6 — config time machine y samba
 echo -e "\n==> BLOQUE 6 — Configuración de Time Machine vía Samba con autodetección..."
 TM_LOG="/var/log/fitandsetup/timemachine.log"
 mkdir -p "$(dirname "$TM_LOG")"
