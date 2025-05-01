@@ -211,6 +211,88 @@ fi
 log "Sincronización activa cada hora y ejecutable manualmente con:"
 log "sudo /usr/local/bin/sync_storage_to_backup.sh"
 
+# BLOQUE 4.5 — Configuración del bridge de red (br0) para la VM
+if grep -q "==> BLOQUE 4.5 COMPLETADO" /var/log/fitandsetup/ha_vm.log; then
+    echo "==> BLOQUE 4.5 ya ejecutado previamente. Saltando..." | tee -a /var/log/fitandsetup/ha_vm.log
+else
+    echo "==> BLOQUE 4.5 — Configuración del bridge de red br0..." | tee -a /var/log/fitandsetup/ha_vm.log
+
+    if ! ip link show br0 &>/dev/null; then
+        nmcli connection add type bridge ifname br0 con-name br0 autoconnect yes
+        nmcli connection modify br0 ipv4.method auto ipv6.method ignore
+        echo "Bridge br0 creado." | tee -a /var/log/fitandsetup/ha_vm.log
+    else
+        echo "El bridge br0 ya existe." | tee -a /var/log/fitandsetup/ha_vm.log
+    fi
+
+    if ! nmcli -g connection.master device show eno1 | grep -q '^br0$'; then
+        echo "Esclavizando eno1 a br0..." | tee -a /var/log/fitandsetup/ha_vm.log
+        nmcli connection modify eno1 master br0 slave-type bridge
+        nmcli connection down eno1 || true
+        nmcli connection up eno1
+    else
+        echo "eno1 ya está esclavizado a br0. Saltando configuración." | tee -a /var/log/fitandsetup/ha_vm.log
+    fi
+
+    nmcli connection up br0 || true
+
+    for i in {1..10}; do
+        state=$(cat /sys/class/net/br0/operstate)
+        if [[ "$state" == "up" ]]; then
+            echo "Bridge br0 activo." | tee -a /var/log/fitandsetup/ha_vm.log
+            break
+        fi
+        echo "Esperando a que br0 esté activo... ($i)" | tee -a /var/log/fitandsetup/ha_vm.log
+        sleep 1
+    done
+
+    echo "==> BLOQUE 4.5 COMPLETADO" | tee -a /var/log/fitandsetup/ha_vm.log
+fi
+
+# BLOQUE X — Configuración segura del bridge br0 con rollback si falla
+echo "===> [Networking] Configurando bridge br0 con rollback si no levanta correctamente..."
+
+# Backup actual de Netplan
+cp /etc/netplan/01-netcfg.yaml /etc/netplan/01-netcfg.yaml.bak
+
+# Crear configuración de bridge br0
+cat <<EOF > /etc/netplan/01-netcfg.yaml
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    eno1:
+      dhcp4: no
+  bridges:
+    br0:
+      interfaces: [eno1]
+      dhcp4: yes
+      parameters:
+        stp: false
+        forward-delay: 0
+EOF
+
+# Aplicar la configuración
+netplan apply
+
+# Esperar hasta 10s a que el bridge esté operativo
+echo "Esperando a que br0 levante..."
+for i in {1..10}; do
+    if [[ "$(cat /sys/class/net/br0/operstate 2>/dev/null)" == "up" ]]; then
+        echo "✅ br0 está operativo."
+        break
+    fi
+    sleep 1
+done
+
+# Si no se levantó, restaurar backup y reaplicar
+if [[ "$(cat /sys/class/net/br0/operstate 2>/dev/null)" != "up" ]]; then
+    echo "⚠️ br0 NO se levantó. Restaurando configuración anterior..."
+    cp /etc/netplan/01-netcfg.yaml.bak /etc/netplan/01-netcfg.yaml
+    netplan apply
+    echo "✅ Configuración restaurada. La red debería seguir funcionando como antes."
+fi
+
 # BLOQUE 5 — Creación limpia de la VM Home Assistant con log
 
 log "[🏠 Instalando Home Assistant en máquina virtual limpia]"
