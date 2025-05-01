@@ -307,7 +307,6 @@ virt-install \
   --noautoconsole \
   --quiet >> "$HA_LOG" 2>&1 &
 
-
 log "[⏳ VM de Home Assistant en proceso de creación en segundo plano...]"
 
 # BLOQUE 6 — config time machine y samba
