@@ -326,13 +326,13 @@ if ! grep -q "$SNAPSHOT_ROOT" "$RS_CONF"; then
   sed -i 's/^#cmd_rsync/cmd_rsync/' "$RS_CONF"
 
   sed -i '/^interval /d' "$RS_CONF"
-  echo -e "interval\t6h\t7" >> "$RS_CONF"
-  echo -e "interval\t12h\t7" >> "$RS_CONF"
-  echo -e "interval\tdaily\t7" >> "$RS_CONF"
-  echo -e "interval\t72h\t4" >> "$RS_CONF"
+  printf "interval\t6h\t7\n" >> "$RS_CONF"
+  printf "interval\t12h\t7\n" >> "$RS_CONF"
+  printf "interval\tdaily\t7\n" >> "$RS_CONF"
+  printf "interval\t72h\t4\n" >> "$RS_CONF"
 
   if ! grep -q -E "backup\s+/\s+" "$RS_CONF"; then
-    echo -e "backup\t$SOURCE\tlocalhost/" >> "$RS_CONF"
+   printf "backup\t$SOURCE\tlocalhost/\n" >> "$RS_CONF"
   fi
 
   mkdir -p "$SNAPSHOT_ROOT"
