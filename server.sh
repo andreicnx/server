@@ -720,8 +720,10 @@ log "[🎞️ Instalando y configurando Jellyfin como servidor DLNA local...]"
 JELLYFIN_LOG="/var/log/fitandsetup/jellyfin.log"
 mkdir -p "$(dirname "$JELLYFIN_LOG")"
 
-# Detectar IP real del servidor
 IP_LOCAL=$(ip -4 route get 8.8.8.8 | grep -oP 'src \K[\d.]+')
+JELLYFIN_API_KEY_FILE="/etc/jellyfin/api_key"
+REFRESH_SCRIPT="/usr/local/bin/jellyfin_refresh.sh"
+LIBRARY_DIR="/mnt/storage/X"
 
 # Instalar Jellyfin si no está
 if ! dpkg -s jellyfin &>/dev/null; then
@@ -734,26 +736,29 @@ fi
 
 log "[✅ Jellyfin instalado y activo en http://$IP_LOCAL:8096]"
 
-# Preguntar por API key o usar existente
-JELLYFIN_API_KEY_FILE="/etc/jellyfin/api_key"
-REFRESH_SCRIPT="/usr/local/bin/jellyfin_refresh.sh"
+# AÑADIR CARPETA COMO BIBLIOTECA si no está
+CONFIG_JSON="/var/lib/jellyfin/data/library/metadata.db"
+if [[ -d "$LIBRARY_DIR" && ! -f "$CONFIG_JSON" ]]; then
+  log "[📁 Añade manualmente la carpeta '$LIBRARY_DIR' como biblioteca desde la interfaz web.]"
+fi
 
-if [[ ! -f "$JELLYFIN_API_KEY_FILE" ]]; then
+# Solicitar API Key si no existe
+if [[ ! -s "$JELLYFIN_API_KEY_FILE" ]]; then
   echo ""
-  echo "🔑 Jellyfin requiere una API Key para refrescar la biblioteca automáticamente."
-  echo "   Accede a: http://$IP_LOCAL:8096"
-  echo "   Luego ve a: Panel de control → API Keys → Nueva clave"
-  read -p "Introduce la API Key ahora (o deja en blanco para saltar): " API_INPUT
+  echo "🔑 Accede a Jellyfin en: http://$IP_LOCAL:8096"
+  echo "→ Panel de control → API Keys → Nueva clave"
+  echo ""
+  read -p "Introduce tu API Key de Jellyfin (o deja en blanco para saltar): " API_INPUT
 
   if [[ -n "$API_INPUT" ]]; then
     echo "$API_INPUT" > "$JELLYFIN_API_KEY_FILE"
-    log "[🔐 API Key guardada.]"
+    log "[🔐 API Key guardada en $JELLYFIN_API_KEY_FILE]"
   else
-    log "[⏩ Saltando configuración del refresco automático por ahora.]"
+    log "[⏩ Saltando refresco automático de biblioteca.]"
   fi
 fi
 
-# Crear script para refrescar biblioteca si hay API
+# Crear script para refrescar si ya hay API Key
 if [[ -s "$JELLYFIN_API_KEY_FILE" ]]; then
   API_KEY=$(cat "$JELLYFIN_API_KEY_FILE")
   cat <<EOF > "$REFRESH_SCRIPT"
@@ -773,7 +778,6 @@ EOF
 
   chmod +x "$REFRESH_SCRIPT"
 
-  # Añadir a crontab si no está
   if ! grep -q jellyfin_refresh /etc/crontab; then
     echo "*/15 * * * * root $REFRESH_SCRIPT" >> /etc/crontab
     log "[⏱️ Refresco automático de biblioteca cada 15 minutos activado.]"
