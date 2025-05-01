@@ -85,28 +85,53 @@ fi
 
 log "Montaje de discos completado."
 
-# Continúa con lo demás (rsync, HAOS, samba, snapshots...) como ya está definido en tu script
+# BLOQUE: Creación limpia de la VM de Home Assistant con log
+log "Preparando VM limpia para Home Assistant..."
 
-# Reemplaza la URL anterior de haos por esta correcta:
-haos_img_url="https://github.com/home-assistant/operating-system/releases/download/10.5/haos_ova-10.5.qcow2.xz"
-haos_img_local="/tmp/haos.qcow2.xz"
+HA_VM_NAME="home-assistant"
+HA_IMAGE="/mnt/homeassistant/haos.qcow2"
+HA_IMG_URL="https://github.com/home-assistant/operating-system/releases/latest/download/haos_ova-ova.qcow2.xz"
+HA_IMG_TMP="/tmp/haos.qcow2.xz"
+HA_LOG="/var/log/fitandsetup/ha_vm.log"
 
-if ! $is_simulation; then
-  curl -L "$haos_img_url" -o "$haos_img_local"
-  unxz "$haos_img_local"
-  mv /tmp/haos.qcow2 "$haos_dir/haos.qcow2"
+mkdir -p /var/log/fitandsetup
 
-  log "Creando VM para Home Assistant..."
-  virt-install --name home-assistant \
-    --memory 2048 --vcpus 2 \
-    --disk path="$haos_dir/haos.qcow2",format=qcow2 \
-    --os-variant generic \
-    --import --network network=default \
-    --noautoconsole
+{
+echo "[🔄 $(date)] Iniciando recreación de VM $HA_VM_NAME..."
+
+if virsh list --all | grep -q "$HA_VM_NAME"; then
+  echo "[🛑] Deteniendo y eliminando VM anterior..."
+  virsh destroy "$HA_VM_NAME" 2>/dev/null
+  virsh undefine "$HA_VM_NAME" --remove-all-storage
 fi
 
-log "Home Assistant instalado y ejecutándose como VM."
+if [ -f "$HA_IMAGE" ]; then
+  echo "[🧹] Eliminando imagen anterior: $HA_IMAGE"
+  rm -f "$HA_IMAGE"
+fi
 
+echo "[⬇️] Descargando nueva imagen de Home Assistant..."
+wget -O "$HA_IMG_TMP" "$HA_IMG_URL"
+
+echo "[📦] Descomprimiendo imagen..."
+unxz "$HA_IMG_TMP"
+mv "${HA_IMG_TMP%.xz}" "$HA_IMAGE"
+
+echo "[🖥️] Creando nueva VM..."
+virt-install \
+  --name "$HA_VM_NAME" \
+  --memory 2048 \
+  --vcpus 2 \
+  --import \
+  --disk path="$HA_IMAGE",format=qcow2 \
+  --network network=default \
+  --os-type=linux \
+  --os-variant=generic \
+  --noautoconsole
+
+echo "[✅ $(date)] VM creada correctamente."
+
+} 2>&1 | tee -a "$HA_LOG"
 # BLOQUE 4: Configuración de Time Machine vía Samba
 log "Instalando Samba y configurando soporte para Time Machine..."
 
