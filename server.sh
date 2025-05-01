@@ -1,4 +1,4 @@
-#!/bin/bash
+o#!/bin/bash
 
 # BLOQUE 0 — Auto-descarga y reejecución desde copia local
 
@@ -46,7 +46,7 @@ if [[ ! -s "$JELLYFIN_API_KEY_FILE" ]]; then
     echo "$API_INPUT" > "$JELLYFIN_API_KEY_FILE"
     log "[🔐 API Key guardada.]"
   else
-    log "[⏩ Saltando configuración del refresco automático por ahora.]"
+    echo "[⏩ Saltando configuración del refresco automático por ahora.]"
     exit 0
   fi
 fi
