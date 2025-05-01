@@ -28,20 +28,17 @@ if ! dpkg -s jellyfin &>/dev/null; then
   apt install -y jellyfin
 fi
 
-# Esperar a que arranque y obtener IP local real
 systemctl enable jellyfin
 systemctl start jellyfin
 sleep 15
+
 IP_LOCAL=$(ip route get 1 | awk '{print $7; exit}')
 log "[✅ Jellyfin instalado y activo en http://$IP_LOCAL:8096]"
 
-# Añadir carpeta como biblioteca si config.json está listo
 CONFIG_FILE="/var/lib/jellyfin/config/system.xml"
 if [[ -f "$CONFIG_FILE" ]]; then
   log "[📁 Añadiendo carpeta '/mnt/storage/X' a la biblioteca de Jellyfin...]"
   mkdir -p /mnt/storage/X
-  # Aún no hay método fiable de insertar librerías vía línea de comandos.
-  # Se espera que el usuario termine configuración inicial desde la web.
 else
   log "[📁 Añade manualmente la carpeta '/mnt/storage/X' como biblioteca desde la interfaz web si es la primera vez.]"
 fi
@@ -54,19 +51,20 @@ if [[ ! -f "$JELLYFIN_API_FILE" ]]; then
   echo "Finaliza la configuración inicial, luego ve a: Panel de control → API Keys → Nueva clave"
   echo ""
 
-  read -r -p "¿Quieres introducir la API Key ahora? (s/n): " RESPUESTA </dev/tty
-  if [[ "$RESPUESTA" == "s" ]]; then
-    read -r -p "Introduce la API Key de Jellyfin: " JELLYFIN_API_KEY </dev/tty
-    echo "$JELLYFIN_API_KEY" > "$JELLYFIN_API_FILE"
-    chmod 600 "$JELLYFIN_API_FILE"
-    log "[✅ API Key guardada en $JELLYFIN_API_FILE]"
-  else
-    log "[⏩ Saltando refresco automático de biblioteca por ahora.]"
-    return 0 2>/dev/null || exit 0
-  fi
+  sudo -u "$SUDO_USER" bash -c '
+    read -r -p "¿Quieres introducir la API Key ahora? (s/n): " respuesta
+    if [[ "$respuesta" == "s" ]]; then
+      read -r -p "Introduce la API Key de Jellyfin: " clave
+      echo "$clave" | sudo tee /etc/jellyfin_api.key >/dev/null
+      sudo chmod 600 /etc/jellyfin_api.key
+    else
+      echo "[⏩ Saltando refresco automático de biblioteca por ahora.]"
+      exit 0
+    fi
+  '
 fi
 
-# Crear script de refresco si no existe
+# Crear script de refresco
 if [[ ! -f "$REFRESH_SCRIPT" ]]; then
   log "[🛠️ Creando script de refresco automático de la biblioteca Jellyfin...]"
   cat <<EOF > "$REFRESH_SCRIPT"
