@@ -1,4 +1,79 @@
 #!/bin/bash
+
+# BLOQUE 1 — Configuración inteligente de DuckDNS
+DUCKDNS_DOMAIN="sumadre"
+DUCKDNS_TOKEN="9947bc93-3b12-427f-8eaf-24d8dbd85b04"
+UPDATE_SCRIPT="/opt/duckdns/update.sh"
+
+check_duckdns_active() {
+  systemctl is-enabled --quiet duckdns.timer && systemctl is-active --quiet duckdns.timer
+}
+
+check_duckdns_token_match() {
+  grep -q "$DUCKDNS_TOKEN" "$UPDATE_SCRIPT" 2>/dev/null
+}
+
+if check_duckdns_active; then
+  if check_duckdns_token_match; then
+    echo "[⏩ DuckDNS ya está activo y configurado correctamente. Saltando.]"
+  else
+    echo "[⚠️ DuckDNS activo pero el token no coincide con el configurado en el script.]"
+    echo "¿Deseas actualizar la configuración de DuckDNS? [S/n]"
+    read -r resp
+    resp=${resp,,}
+    if [[ "$resp" =~ ^(n|no)$ ]]; then
+      echo "⏭️  DuckDNS no modificado."
+    else
+      systemctl disable --now duckdns.timer
+      rm -f "$UPDATE_SCRIPT"
+      rm -f /etc/systemd/system/duckdns.{service,timer}
+      systemctl daemon-reload
+    fi
+  fi
+fi
+
+# Solo si no está activo o se borró el anterior
+if ! check_duckdns_active || ! check_duckdns_token_match; then
+  echo "[🌐 Instalando cliente DuckDNS con systemd...]"
+
+  sudo mkdir -p /opt/duckdns
+  cat <<EOF | sudo tee "$UPDATE_SCRIPT" > /dev/null
+#!/bin/bash
+echo url="https://www.duckdns.org/update?domains=${DUCKDNS_DOMAIN}&token=${DUCKDNS_TOKEN}&ip=" | curl -k -o /opt/duckdns/duck.log -K -
+EOF
+  sudo chmod +x "$UPDATE_SCRIPT"
+
+  # Servicio systemd
+  cat <<EOF | sudo tee /etc/systemd/system/duckdns.service > /dev/null
+[Unit]
+Description=DuckDNS Updater
+
+[Service]
+Type=oneshot
+ExecStart=$UPDATE_SCRIPT
+EOF
+
+  # Timer systemd
+  cat <<EOF | sudo tee /etc/systemd/system/duckdns.timer > /dev/null
+[Unit]
+Description=Actualizar IP de DuckDNS cada 30 minutos
+
+[Timer]
+OnBootSec=30sec
+OnUnitActiveSec=30min
+Unit=duckdns.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  sudo systemctl daemon-reexec
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now duckdns.timer
+
+  echo "[✅ DuckDNS configurado y activo]"
+fi
+
 echo "[🔧 Instalando dependencias base para virtualización y servicios...]"
 sudo apt update
 sudo apt install -y \
