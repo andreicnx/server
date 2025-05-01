@@ -607,7 +607,7 @@ EOSCRIPT
     log "[🔎 Simulación: no se configuró el backup de Home Assistant.]"
   fi
 fi
-# BLOQUE FINAL — Comprobación visual del sistema tras la instalación
+# BLOQUE 10 — Comprobación visual del sistema tras la instalación
 echo -e "\n==> BLOQUE 10 — Comprobación visual del sistema tras la instalación..."
 log "[🔍 Comprobación final del sistema...]"
 
@@ -674,3 +674,21 @@ EOF
   echo "0 */6 * * * root $CHECK_SCRIPT" > "$CHECK_CRON"
   log "[✅ Script de verificación creado y programado cada 6h.]"
 fi
+
+# BLOQUE 11 — Actualización automática del sistema (semanal)
+log "[🛠️ Programando actualizaciones automáticas del sistema cada semana...]"
+
+AUTO_UPGRADE_SCRIPT="/usr/local/bin/system_weekly_upgrade.sh"
+CRON_FILE="/etc/cron.d/system_weekly_upgrade"
+
+cat <<'EOF' > "$AUTO_UPGRADE_SCRIPT"
+#!/bin/bash
+LOG="/var/log/fitandsetup/system_upgrade.log"
+echo "[🔧 $(date)] Iniciando actualización semanal del sistema..." >> "$LOG"
+apt update >> "$LOG" 2>&1
+apt upgrade -y >> "$LOG" 2>&1
+echo "[✅ $(date)] Actualización completada." >> "$LOG"
+EOF
+
+chmod +x "$AUTO_UPGRADE_SCRIPT"
+echo "0 4 * * 1 root $AUTO_UPGRADE_SCRIPT" > "$CRON_FILE"
