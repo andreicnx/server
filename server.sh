@@ -85,6 +85,38 @@ fi
 
 log "Montaje de discos completado."
 
+# BLOQUE: Sincronización automática de /mnt/storage a /mnt/backup
+
+log "Configurando sincronización automática de /mnt/storage a /mnt/backup..."
+
+BACKUP_LOG="/var/log/fitandsetup/backup_sync.log"
+mkdir -p /var/log/fitandsetup
+
+# Script de sincronización con exclusiones
+cat <<'EOF' | sudo tee /usr/local/bin/sync_storage_to_backup.sh > /dev/null
+#!/bin/bash
+SRC="/mnt/storage"
+DST="/mnt/backup"
+LOG="/var/log/fitandsetup/backup_sync.log"
+
+if mountpoint -q "$SRC" && mountpoint -q "$DST"; then
+  echo "[🔄 $(date)] Iniciando sincronización..." >> "$LOG"
+  rsync -aAXHv --delete --exclude="rsnapshot/" "$SRC/" "$DST/" >> "$LOG" 2>&1
+  echo "[✅ $(date)] Sincronización completada." >> "$LOG"
+  echo "Última sincronización correcta: $(date)" > "$DST/.ultima_sync.txt"
+else
+  echo "[⚠️ $(date)] Uno de los discos no está montado. Sincronización cancelada." >> "$LOG"
+fi
+EOF
+
+sudo chmod +x /usr/local/bin/sync_storage_to_backup.sh
+
+# Cron para ejecutar cada hora
+echo "0 * * * * root /usr/local/bin/sync_storage_to_backup.sh" | sudo tee /etc/cron.d/storage_backup_sync > /dev/null
+
+log "Sincronización activa cada hora y ejecutable manualmente con:"
+log "sudo /usr/local/bin/sync_storage_to_backup.sh"
+
 # BLOQUE: Creación limpia de la VM de Home Assistant con log
 log "Preparando VM limpia para Home Assistant..."
 
