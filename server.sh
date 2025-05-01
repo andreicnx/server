@@ -8,69 +8,68 @@ mkdir -p "$LOG_DIR"
 log() {
   echo -e "[$(date +'%F %T')] $1" | tee -a "$LOG_DIR/general.log"
 }
-# BLOQUE — Instalación y configuración de Jellyfin con DLNA y refresco automático opcional
+
 log "[🎞️ Instalando y configurando Jellyfin como servidor DLNA local...]"
 
-# 1. Instalar Jellyfin si no está
+JELLYFIN_LOG="/var/log/fitandsetup/jellyfin.log"
+mkdir -p "$(dirname "$JELLYFIN_LOG")"
+
+# Detectar IP real del servidor
+IP_LOCAL=$(ip -4 route get 8.8.8.8 | grep -oP 'src \K[\d.]+')
+
+# Instalar Jellyfin si no está
 if ! dpkg -s jellyfin &>/dev/null; then
-  curl -fsSL https://repo.jellyfin.org/install-debuntu.sh | bash -s -- -y
+  curl -fsSL https://repo.jellyfin.org/install-deb | bash -s -- --non-interactive
+  apt update && apt install -y jellyfin
+  systemctl enable jellyfin
+  systemctl start jellyfin
+  sleep 15
 fi
 
-# 2. Verificar servicio activo
-if systemctl is-active --quiet jellyfin; then
-  JELLYFIN_IP=$(hostname -I | awk '{print $1}')
-  log "[✅ Jellyfin instalado y activo en http://$JELLYFIN_IP:8096]"
-else
-  log "[❌ Jellyfin no está activo tras la instalación. Revisa el estado con: systemctl status jellyfin]"
-  exit 1
-fi
+log "[✅ Jellyfin instalado y activo en http://$IP_LOCAL:8096]"
 
-# 3. Confirmar configuración inicial y generación de API
-echo -e "\n🔑 Para habilitar el refresco automático, necesitas crear una API Key en:
-→ http://$JELLYFIN_IP:8096
-Finaliza la configuración inicial, luego ve a: Panel de control → API Keys → Nueva clave\n"
-
-CONFIG_FILE="/etc/fitandsetup/jellyfin_api_key.conf"
-mkdir -p /etc/fitandsetup
-
-if [[ ! -f "$CONFIG_FILE" || -z $(cat "$CONFIG_FILE") ]]; then
-  sudo -u "$SUDO_USER" bash -c '
-    read -rp "¿Quieres introducir la API Key ahora? (s/n): " respuesta
-    if [[ "$respuesta" == "s" || "$respuesta" == "S" ]]; then
-      read -rp "Introduce tu API Key: " clave
-      echo "$clave" > "$CONFIG_FILE"
-      echo "[✅ API Key guardada en $CONFIG_FILE]"
-    else
-      echo "[⏩ Saltando refresco automático de biblioteca por ahora.]"
-    fi
-  '
-else
-  echo "[⏩ API Key ya guardada previamente. Usando archivo existente.]"
-fi
-
-# 4. Crear script de refresco automático si API está disponible
-API_KEY=$(cat "$CONFIG_FILE" 2>/dev/null)
+# Preguntar por API key o usar existente
+JELLYFIN_API_KEY_FILE="/etc/jellyfin/api_key"
 REFRESH_SCRIPT="/usr/local/bin/jellyfin_refresh.sh"
-JELLYFIN_LOG="/var/log/fitandsetup/jellyfin_refresh.log"
 
-if [[ -n "$API_KEY" ]]; then
+if [[ ! -f "$JELLYFIN_API_KEY_FILE" ]]; then
+  echo ""
+  echo "🔑 Jellyfin requiere una API Key para refrescar la biblioteca automáticamente."
+  echo "   Accede a: http://$IP_LOCAL:8096"
+  echo "   Luego ve a: Panel de control → API Keys → Nueva clave"
+  read -p "Introduce la API Key ahora (o deja en blanco para saltar): " API_INPUT
+
+  if [[ -n "$API_INPUT" ]]; then
+    echo "$API_INPUT" > "$JELLYFIN_API_KEY_FILE"
+    log "[🔐 API Key guardada.]"
+  else
+    log "[⏩ Saltando configuración del refresco automático por ahora.]"
+  fi
+fi
+
+# Crear script para refrescar biblioteca si hay API
+if [[ -s "$JELLYFIN_API_KEY_FILE" ]]; then
+  API_KEY=$(cat "$JELLYFIN_API_KEY_FILE")
   cat <<EOF > "$REFRESH_SCRIPT"
 #!/bin/bash
-HOST="http://$JELLYFIN_IP:8096"
+LOG="/var/log/fitandsetup/jellyfin_refresh.log"
+HOST="http://$IP_LOCAL:8096"
+API_KEY="$API_KEY"
 
 if ! systemctl is-active --quiet jellyfin; then
-  echo "[\$(date)] Jellyfin no estaba activo. Iniciando..." >> "$JELLYFIN_LOG"
+  echo "[\$(date)] Jellyfin no estaba activo. Iniciando..." >> "\$LOG"
   systemctl start jellyfin
   sleep 10
 fi
 
-curl -s -X POST "\$HOST/Library/Refresh" -H "X-Emby-Token: \$API_KEY" >> "$JELLYFIN_LOG"
+curl -s -X POST "\$HOST/Library/Refresh" -H "X-Emby-Token: \$API_KEY" >> "\$LOG"
 EOF
 
   chmod +x "$REFRESH_SCRIPT"
-  # Añadir cron si no existe
+
+  # Añadir a crontab si no está
   if ! grep -q jellyfin_refresh /etc/crontab; then
     echo "*/15 * * * * root $REFRESH_SCRIPT" >> /etc/crontab
+    log "[⏱️ Refresco automático de biblioteca cada 15 minutos activado.]"
   fi
-  echo "[✅ Refresco automático de biblioteca configurado cada 15 min.]"
 fi
