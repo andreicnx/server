@@ -751,7 +751,7 @@ systemctl enable jellyfin
 systemctl start jellyfin
 
 # Detectar IP local real
-SERVER_IP=$(hostname -I | awk '{print $1}')
+SERVER_IP=$(ip route get 8.8.8.8 | awk '{print $7}')
 log "[✅ Jellyfin instalado y activo en http://$SERVER_IP:8096]"
 
 # Añadir carpeta de vídeos si no se ha hecho ya
