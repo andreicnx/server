@@ -289,7 +289,6 @@ if virsh list --all | grep -q "$HA_VM"; then
 fi
 
 mkdir -p "$HA_DIR"
-rm -f "$HA_DISK"
 
 log "[⬇️ Buscando la última imagen de HAOS en formato .qcow2.xz...]"
 HA_URL=$(curl -s https://api.github.com/repos/home-assistant/operating-system/releases/latest \
@@ -300,8 +299,11 @@ HA_URL=$(curl -s https://api.github.com/repos/home-assistant/operating-system/re
 log "[⬇️ Descargando imagen desde: $HA_URL]"
 curl -L -o "$HA_DISK.xz" "$HA_URL"
 
+log "[📦 Eliminando archivo anterior descomprimido (si existe)...]"
+rm -f "$HA_DISK"
+
 log "[📦 Descomprimiendo imagen...]"
-xz -df "$HA_DISK.xz"
+xz -d "$HA_DISK.xz"
 
 log "[⚙️ Creando VM con libvirt...]"
 virt-install \
