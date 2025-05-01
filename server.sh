@@ -381,3 +381,64 @@ CLEAN
 fi
 
 log "rsnapshot configurado con backups automáticos y limpieza inteligente."
+
+
+# BLOQUE FINAL — Comprobación visual del sistema tras la instalación
+
+log "[🔍 Comprobación final del sistema...]"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # Sin color
+
+CHECKS_FAILED=0
+
+check() {
+  desc="$1"
+  shift
+  if "$@" &>/dev/null; then
+    echo -e "${GREEN}[✅]${NC} $desc"
+  else
+    echo -e "${YELLOW}[⚠️ ]${NC} $desc — ${RED}Falló${NC}"
+    ((CHECKS_FAILED++))
+  fi
+}
+
+echo -e "\n${YELLOW}--------[ 🧮 SISTEMA MONTADO ]--------${NC}"
+check "/mnt/storage montado" mountpoint -q /mnt/storage
+check "/mnt/backup montado" mountpoint -q /mnt/backup
+
+echo -e "\n${YELLOW}--------[ 🌐 DUCKDNS ]--------${NC}"
+check "Archivo de actualización existe" test -f /opt/duckdns/update.sh
+check "Timer duckdns activo" systemctl is-active --quiet duckdns.timer
+
+echo -e "\n${YELLOW}--------[ 🏠 HOME ASSISTANT VM ]--------${NC}"
+check "VM creada" virsh list --all | grep -q home-assistant
+check "Archivo de disco existe" test -f /mnt/storage/haos_vm/haos.qcow2
+
+echo -e "\n${YELLOW}--------[ 💾 TIME MACHINE ]--------${NC}"
+check "Carpeta timemachine existe" test -d /mnt/storage/timemachine
+check "Samba activo" systemctl is-active --quiet smbd
+
+echo -e "\n${YELLOW}--------[ 🔁 SYNC STORAGE → BACKUP ]--------${NC}"
+check "Script de sync existe" test -x /usr/local/bin/sync_storage_to_backup.sh
+check "Archivo .ultima_sync.txt generado" test -f /mnt/backup/.ultima_sync.txt
+
+echo -e "\n${YELLOW}--------[ 📸 SNAPSHOTS (rsnapshot) ]--------${NC}"
+check "Archivo de configuración rsnapshot existe" test -f /etc/rsnapshot.conf
+check "Snapshot 6h ejecuta correctamente" rsnapshot -t 6h
+check "Script limpieza existe" test -x /usr/local/bin/rsnapshot_cleanup_if_low_space.sh
+
+echo -e "\n${YELLOW}--------[ 📂 LOGS DISPONIBLES ]--------${NC}"
+echo -e "${GREEN}  - /var/log/fitandsetup/general.log"
+echo -e "  - /var/log/fitandsetup/ha_vm.log"
+echo -e "  - /var/log/fitandsetup/backup_sync.log"
+echo -e "  - /var/log/fitandsetup/rsnapshot_cleanup.log${NC}"
+
+# Resumen
+if [[ $CHECKS_FAILED -eq 0 ]]; then
+  echo -e "\n${GREEN}[✅ TODO OK] Instalación y verificación completas.${NC}"
+else
+  echo -e "\n${YELLOW}[⚠️ $CHECKS_FAILED chequeos fallaron] Revisa arriba o en los logs para más detalle.${NC}"
+fi
