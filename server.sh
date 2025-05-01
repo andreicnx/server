@@ -1,3 +1,4 @@
+
 #!/bin/bash
 
 # BLOQUE 0.0
@@ -72,4 +73,18 @@ EOF
     echo "*/15 * * * * root $REFRESH_SCRIPT" >> /etc/crontab
     log "[⏱️ Refresco automático de biblioteca cada 15 minutos activado.]"
   fi
+fi
+
+
+# BLOQUE FINAL — Autorreparación si no se pudo leer la API
+JELLYFIN_API_KEY_FILE="/etc/jellyfin/api_key"
+SCRIPT_PATH="/usr/local/bin/fitandsetup.sh"
+
+if [[ ! -s "$JELLYFIN_API_KEY_FILE" && "$0" != "$SCRIPT_PATH" ]]; then
+  echo "[🧩 Detected missing API Key and input not captured — preparing local rerun...]"
+  curl -s -o "$SCRIPT_PATH" https://raw.githubusercontent.com/andreicnx/server/main/server.sh
+  chmod +x "$SCRIPT_PATH"
+  echo "[🔁 Reejecutando script correctamente desde: $SCRIPT_PATH]"
+  sudo "$SCRIPT_PATH"
+  exit 0
 fi
