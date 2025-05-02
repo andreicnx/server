@@ -5,11 +5,9 @@ set -e
 LOG_DIR="/var/log/fitandsetup"
 mkdir -p "$LOG_DIR"
 
-
 log() {
   echo -e "[$(date +'%F %T')] $1" | tee -a "$LOG_DIR/general.log"
 }
-
 
 # BLOQUE 5 — Instalación limpia de Home Assistant en disco dedicado
 log "[🔁 Reinstalando Home Assistant desde cero en disco exclusivo...]"
@@ -48,7 +46,7 @@ curl -L -o "${HA_DISK}.xz" "$HA_URL"
 log "[📦 Descomprimiendo imagen...]"
 xz -d "${HA_DISK}.xz"
 
-# Crear VM con consola activa
+# Crear VM
 log "[⚙️ Creando VM con libvirt...]"
 virt-install \
   --name "$HA_VM" \
@@ -58,6 +56,8 @@ virt-install \
   --import \
   --os-variant generic \
   --network bridge=br0 \
+  --graphics none \
+  --console pty,target_type=serial \
   --quiet >> "$HA_LOG" 2>&1
 
-log "[⏳ VM de Home Assistant lanzada. Conéctate con 'virsh console home-assistant']"
+log "[⏳ VM de Home Assistant en proceso de creación en segundo plano...]"
