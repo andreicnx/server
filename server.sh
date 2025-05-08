@@ -565,6 +565,24 @@ else
   log_wg "[🔎 Simulación: configuración de WireGuard omitida.]"
 fi
 
+# BLOQUE 8.1 — Habilitar NAT para VPN (full tunnel)
+log_wg "[🌍 Añadiendo regla NAT para salida a Internet desde la VPN...]"
+
+# Añadir regla NAT para interfaz de salida (eno1)
+iptables -t nat -C POSTROUTING -o eno1 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o eno1 -j MASQUERADE
+
+# Hacer persistente con iptables-persistent
+if ! dpkg -l | grep -q iptables-persistent; then
+  echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
+  echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections
+  apt install -y iptables-persistent
+else
+  log_wg "[ℹ️  iptables-persistent ya instalado]"
+fi
+
+log_wg "[✅ Reenvío de tráfico NAT configurado y persistente]"
+
+
 # BLOQUE 9 — Backup automático de Home Assistant
 log "[📦 Configurando backups automáticos de Home Assistant...]"
 
