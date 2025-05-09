@@ -479,7 +479,7 @@ fi
 
 log "rsnapshot configurado con backups automáticos y limpieza inteligente."
 
-# BLOQUE 8 — VPN local con WireGuard
+# BLOQUE 8 — VPN local con WireGuard (full tunnel + NAT + 10 clientes)
 echo -e "\n==> BLOQUE 8 — VPN local con WireGuard (hasta 10 clientes)..."
 WG_LOG="/var/log/fitandsetup/wireguard.log"
 mkdir -p "$(dirname "$WG_LOG")"
@@ -491,21 +491,23 @@ log_wg() {
 log_wg "[🔐 Configurando VPN local con WireGuard (10 clientes)...]"
 
 if ! $is_simulation; then
-  if [[ -f /etc/wireguard/wg0.conf ]]; then
-    log_wg "[⏩ WireGuard ya está configurado. Saltando.]"
-  else
-    apt install -y wireguard qrencode
+  apt install -y wireguard qrencode
 
-    mkdir -p /etc/wireguard/keys /etc/wireguard/clients
-    chmod 700 /etc/wireguard
-    chmod 600 /etc/wireguard/keys/* 2>/dev/null || true
+  rm -rf /etc/wireguard/keys/cliente*
+  rm -rf /etc/wireguard/clients/cliente*
+  rm -rf /mnt/storage/wireguard_backups/clients/cliente*
+  rm -rf /mnt/storage/wireguard_backups/qrcodes/cliente*.png
 
-    wg genkey | tee /etc/wireguard/keys/server_private.key | wg pubkey > /etc/wireguard/keys/server_public.key
+  mkdir -p /etc/wireguard/keys /etc/wireguard/clients
+  chmod 700 /etc/wireguard
+  chmod 600 /etc/wireguard/keys/* 2>/dev/null || true
 
-    server_priv=$(< /etc/wireguard/keys/server_private.key)
-    server_pub=$(< /etc/wireguard/keys/server_public.key)
+  wg genkey | tee /etc/wireguard/keys/server_private.key | wg pubkey > /etc/wireguard/keys/server_public.key
 
-    cat <<EOF > /etc/wireguard/wg0.conf
+  server_priv=$(< /etc/wireguard/keys/server_private.key)
+  server_pub=$(< /etc/wireguard/keys/server_public.key)
+
+  cat <<EOF > /etc/wireguard/wg0.conf
 [Interface]
 Address = 10.8.0.1/24
 ListenPort = 51820
@@ -513,25 +515,25 @@ PrivateKey = $server_priv
 SaveConfig = true
 EOF
 
-    mkdir -p /mnt/storage/wireguard_backups/qrcodes
+  mkdir -p /mnt/storage/wireguard_backups/{clients,qrcodes}
 
-    for i in {1..10}; do
-      client="cliente$i"
-      priv_key=$(wg genkey)
-      pub_key=$(echo "$priv_key" | wg pubkey)
-      ip="10.8.0.$((i+1))"
+  for i in {1..10}; do
+    client="cliente$i"
+    priv_key=$(wg genkey)
+    pub_key=$(echo "$priv_key" | wg pubkey)
+    ip="10.8.0.$((i+1))"
 
-      echo "$priv_key" > /etc/wireguard/keys/${client}_private.key
-      echo "$pub_key"  > /etc/wireguard/keys/${client}_public.key
+    echo "$priv_key" > /etc/wireguard/keys/${client}_private.key
+    echo "$pub_key"  > /etc/wireguard/keys/${client}_public.key
 
-      cat <<EOL >> /etc/wireguard/wg0.conf
+    cat <<EOL >> /etc/wireguard/wg0.conf
 
 [Peer]
 PublicKey = $pub_key
 AllowedIPs = $ip/32
 EOL
 
-      cat <<EOC > /etc/wireguard/clients/${client}.conf
+    cat <<EOC > /etc/wireguard/clients/${client}.conf
 [Interface]
 PrivateKey = $priv_key
 Address = $ip/24
@@ -539,49 +541,42 @@ DNS = 1.1.1.1
 
 [Peer]
 PublicKey = $server_pub
-Endpoint = $(curl -s ifconfig.me):51820
+Endpoint = sumadre.duckdns.org:51820
 AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 25
 EOC
 
-      qrencode -o "/mnt/storage/wireguard_backups/qrcodes/${client}.png" < /etc/wireguard/clients/${client}.conf
-    done
+    cp /etc/wireguard/clients/${client}.conf /mnt/storage/wireguard_backups/clients/
+    qrencode -o "/mnt/storage/wireguard_backups/qrcodes/${client}.png" < /etc/wireguard/clients/${client}.conf
+  done
 
-    sed -i 's/^#\?net.ipv4.ip_forward=.*/net.ipv4.ip_forward=1/' /etc/sysctl.conf
-    sysctl -p
+  sed -i 's/^#\?net.ipv4.ip_forward=.*/net.ipv4.ip_forward=1/' /etc/sysctl.conf
+  sysctl -p
 
-    systemctl enable wg-quick@wg0
-    systemctl start wg-quick@wg0
+  log_wg "[🌍 Añadiendo regla NAT para salida a Internet desde la VPN...]"
+  iptables -t nat -C POSTROUTING -o eno1 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o eno1 -j MASQUERADE
 
-    cp -r /etc/wireguard/* /mnt/storage/wireguard_backups/
-
-    if command -v ufw &>/dev/null; then
-      ufw allow 51820/udp
-    fi
-
-    log_wg "[✅ WireGuard configurado correctamente. Archivos y QR en /mnt/storage/wireguard_backups]"
+  if ! dpkg -l | grep -q iptables-persistent; then
+    echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
+    echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections
+    apt install -y iptables-persistent
+  else
+    log_wg "[ℹ️  iptables-persistent ya instalado]"
   fi
+
+  systemctl enable wg-quick@wg0
+  systemctl restart wg-quick@wg0
+
+  cp -r /etc/wireguard/* /mnt/storage/wireguard_backups/
+
+  if command -v ufw &>/dev/null; then
+    ufw allow 51820/udp
+  fi
+
+  log_wg "[✅ WireGuard configurado correctamente. Clientes, QR y NAT listos]"
 else
   log_wg "[🔎 Simulación: configuración de WireGuard omitida.]"
 fi
-
-# BLOQUE 8.1 — Habilitar NAT para VPN (full tunnel)
-log_wg "[🌍 Añadiendo regla NAT para salida a Internet desde la VPN...]"
-
-# Añadir regla NAT para interfaz de salida (eno1)
-iptables -t nat -C POSTROUTING -o eno1 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o eno1 -j MASQUERADE
-
-# Hacer persistente con iptables-persistent
-if ! dpkg -l | grep -q iptables-persistent; then
-  echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
-  echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections
-  apt install -y iptables-persistent
-else
-  log_wg "[ℹ️  iptables-persistent ya instalado]"
-fi
-
-log_wg "[✅ Reenvío de tráfico NAT configurado y persistente]"
-
 
 # BLOQUE 9 — Backup automático de Home Assistant
 log "[📦 Configurando backups automáticos de Home Assistant...]"
